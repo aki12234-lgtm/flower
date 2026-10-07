@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Flower — shader build time</title>
+<!--
+  How long each of the renderer's programs takes to build, from a cold cache.
+
+  On Windows the browser translates GLSL to HLSL and hands it to Direct3D's
+  compiler, which is slow on long shaders with loops and branches — slow enough,
+  past a point, that the first load of the game sits on a black screen for a
+  minute and the GPU watchdog can give up on the context altogether. The
+  browser's shader cache hides this from anyone who has loaded the game before,
+  so it has to be measured in a fresh profile:
+
+    tools/compile.html            the live renderer
+    tools/compile.html?base=v2    a frozen version
+
+  Saves tools/snapshots/compile_<which>.txt.
+-->
+<pre id="out">building…</pre>
+<script type="module">
+const q = new URLSearchParams(location.search);
+const base = q.get('base');
+const src = base ? `../versions/${base}/src/gl/renderer3d.js` : '../src/gl/renderer3d.js';
+const P = WebGL2RenderingContext.prototype;
+
+// ?stub=surfaceHeight,patternTint — replace those functions' bodies with a
+// constant, to find out which of them the compiler is spending its time on
+const stubs = (q.get('stub') || '').split(',').filter(Boolean);
+const source = P.shaderSource;
+P.shaderSource = function (sh, text) {
+  for (const name of stubs) {
+    const m = new RegExp(`\\n(float|vec3|vec4|vec2) ${name}\\(`).exec(text);
+    if (!m) continue;
+    let i = text.indexOf('{', m.index);
+    const open = i;
+    let depth = 0;
+    for (; i < text.length; i++) {
+      if (text[i] === '{') depth++;
+      else if (text[i] === '}' && --depth === 0) break;
+    }
+    const value = { float: '0.5', vec2: 'vec2(0.5)', vec3: 'vec3(1.0)', vec4: 'vec4(1.0)' }[m[1]];
+    text = text.slice(0, open) + `{ return ${value}; }` + text.slice(i + 1);
+  }
+  return source.call(this, sh, text);
+};
+const made = P.createProgram;
+const status = P.getProgramParameter;
+const times = [];
+P.createProgram = function () { const p = made.call(this); p.__t = performance.now(); return p; };
+P.getProgramParameter = function (p, pname) {
+  const r = status.call(this, p, pname);
+  if (pname === this.LINK_STATUS && p.__t) { times.push(performance.now() - p.__t); p.__t = 0; }
+  return r;
+};
+const names = ['scene', 'cards', 'depth', 'post'];
+let text;
+try {
+  const { Renderer3D } = await import(src);
+  const c = document.createElement('canvas');
+  c.width = 64;
+  c.height = 64;
+  document.body.append(c);
+  const t0 = performance.now();
+  new Renderer3D(c, {});
+  text = `${base || 'now'}${stubs.length ? ' without ' + stubs.join(', ') : ''}: `
+    + `${(performance.now() - t0).toFixed(0)} ms in all\n`
+    + times.map((t, i) => `  ${names[i] || i}: ${t.toFixed(0)} ms`).join('\n');
+} catch (e) {
+  text = `${base || 'now'}: failed\n${String(e.message).split('\n').filter((l) => /ERROR|fail/.test(l)).join('\n')}`;
+}
+document.getElementById('out').textContent = text;
+await fetch('/_snap', { method: 'POST',
+  body: JSON.stringify({ name: `compile_${base || 'now'}${q.get('tag') ? '_' + q.get('tag') : ''}.txt`,
+    data: 'data:text/plain;base64,' + btoa(unescape(encodeURIComponent(text))) }) });
+</script>

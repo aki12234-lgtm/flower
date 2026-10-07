@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flower — v1 against v2</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 28px 60px; background: #0b0b0e; color: #f2ece0;
+         font: 13px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font: 400 22px/1.2 Georgia, serif; margin: 0 0 4px; }
+  #status { color: rgba(242,236,224,0.45); margin-bottom: 18px; }
+  .row { display: grid; grid-template-columns: 90px 1fr 1fr; gap: 14px; align-items: start;
+         margin-bottom: 18px; }
+  .row h3 { font: 400 15px/1.3 Georgia, serif; margin: 8px 0 0; }
+  figure { margin: 0; }
+  .shot { width: 100%; max-width: 420px; aspect-ratio: 3 / 4; display: block; border-radius: 3px; }
+  figcaption { color: rgba(242,236,224,0.45); font-size: 12px; margin-top: 4px; }
+  @media (max-width: 700px) {
+    body { padding: 16px; }
+    .row { grid-template-columns: 1fr 1fr; }
+    .row h3 { grid-column: 1 / -1; margin: 0; }
+  }
+</style>
+</head>
+<body>
+  <h1>v1 against v2</h1>
+  <div id="status">rendering…</div>
+  <div id="sheet"></div>
+  <script type="module" src="src/gl/devcompare.js"></script>
+</body>
+</html>

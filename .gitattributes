@@ -1,0 +1,3 @@
+# Everything is written with LF; keep it that way on Windows checkouts too.
+* text=auto eol=lf
+*.png binary

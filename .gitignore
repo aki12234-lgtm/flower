@@ -1,0 +1,9 @@
+# Written by the server's /_snap and the dev pages: around a hundred megabytes
+# of contact sheets and frames, only ever looked at locally.
+tools/snapshots/
+tools/serve.log
+
+node_modules/
+.DS_Store
+Thumbs.db
+desktop.ini

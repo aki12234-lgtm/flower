@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flower — comparison grid</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; padding: 24px;
+    background: #0b0b0e; color: #f2ece0;
+    font: 14px/1.5 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font: 400 22px/1.3 Georgia, serif; margin: 0 0 6px; }
+  p.lede { margin: 0 0 22px; color: rgba(242,236,224,0.6); max-width: 74ch; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 22px; align-items: center; }
+  button, select, input {
+    font: inherit; color: #f2ece0; background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(242,236,224,0.22); border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  }
+  button:hover { background: rgba(255,255,255,0.12); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; }
+  .card { border: 1px solid rgba(242,236,224,0.14); border-radius: 12px; overflow: hidden; background: #08080a; }
+  .card canvas { display: block; width: 100%; height: 660px; }
+  .meta { padding: 11px 13px; border-top: 1px solid rgba(242,236,224,0.12); }
+  .meta h2 { margin: 0 0 5px; font: 500 14px/1.3 inherit; letter-spacing: 0.02em; }
+  .meta dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 12px; }
+  .meta dt { color: rgba(242,236,224,0.42); }
+  .meta dd { margin: 0; color: rgba(242,236,224,0.78); }
+  .note { margin-top: 26px; color: rgba(242,236,224,0.5); font-size: 13px; max-width: 74ch; }
+</style>
+</head>
+<body>
+  <h1>Six answer sequences, one rule set</h1>
+  <p class="lede">
+    Each plant below was grown by a different imaginary player answering the same
+    run of questions. Nothing about the rules changed between them — only the
+    answers. Switch to <em>same answers, different noise</em> to see how much of
+    the shape is luck rather than choice.
+  </p>
+
+  <div class="controls">
+    <label>mode
+      <select id="mode">
+        <option value="answers">different answers, same noise</option>
+        <option value="noise">same answers, different noise</option>
+      </select>
+    </label>
+    <label>turns <input id="turns" type="number" value="20" min="3" max="60" style="width:72px"></label>
+    <label>seed <input id="seed" type="text" value="1" style="width:96px"></label>
+    <button id="regrow">grow</button>
+    <button id="shuffle">new seed</button>
+  </div>
+
+  <div class="grid" id="grid"></div>
+
+  <p class="note">
+    Run <code>node tools/simulate.js</code> for the same comparison as numbers,
+    including the signal-to-noise ratio between these two modes.
+  </p>
+
+  <script type="module" src="src/dev.js"></script>
+</body>
+</html>

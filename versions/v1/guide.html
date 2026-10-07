@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flower — field guide</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 26px 30px 60px; background: #0b0b0e; color: #f2ece0;
+         font: 13px/1.6 ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font: 400 24px/1.2 Georgia, serif; margin: 0 0 4px; }
+  h2 { font: 400 17px/1.3 Georgia, serif; margin: 34px 0 4px;
+       border-bottom: 1px solid rgba(242,236,224,0.14); padding-bottom: 7px; }
+  p  { color: rgba(242,236,224,0.55); margin: 0 0 6px; max-width: 76ch; }
+  #status { color: rgba(242,236,224,0.4); margin-bottom: 4px; }
+  .grid { display: grid; gap: 16px; margin-top: 14px;
+          grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); }
+  figure { margin: 0; }
+  figcaption { margin-top: 6px; display: flex; gap: 8px; align-items: baseline; }
+  figcaption b { font-weight: 600; }
+  figcaption span { color: rgba(242,236,224,0.42); font-size: 12px; }
+  figcaption .bad { color: #ef8a7a; }
+</style>
+</head>
+<body>
+  <h1>Field guide</h1>
+  <div id="status">rendering…</div>
+
+  <h2>Botanical kinds</h2>
+  <p>
+    The twenty-eight parts a node can be, every one shown on the same specimen
+    so only the botany differs. Eighteen are flowers or fruit, ten are foliage.
+    Four — spider, burr, saw, arrow — are deliberately sharp where the rest are
+    curved, and three — button, trumpet, pom — are deliberately plain. Which of
+    them a plant grows is weighted by the hidden values, and only the strongest
+    three are ever in play at once.
+  </p>
+  <div class="grid" id="kinds"></div>
+
+  <h2>Materials</h2>
+  <p>Forty-one states on one armature: twenty-two substances and nineteen graphic ones — prints, drawings, instrument readings.</p>
+  <div class="grid" id="materials"></div>
+
+  <h2>Places</h2>
+  <p>
+    The six places a game can happen in — real ones, each with its own ground,
+    its own weather at the horizon, and its own things growing or lying on it.
+    A field has grass and hedges under open sky. A beach has the sea a little way
+    out, shelving into it. The ocean is not beside the water but under it: the
+    plant grows up off a reef through coral and fish towards a surface that is a
+    ceiling of light. A forest is trunks on every side and almost no sky. A cave
+    is rock on every side and no sky at all, lit by one break in the roof — which
+    is also the only direction out of it. Which one a plant gets is fixed by its
+    seed and holds for the whole game: it is the only part of the world that
+    never changes under it.
+  </p>
+  <div class="grid" id="grounds"></div>
+
+  <h2>Eras</h2>
+  <p>
+    The world keeps its own hours. Every so often the whole of it — ground, air,
+    cloud, and the growth in the distance — takes on one manner, and the plant
+    goes on standing in it in whatever manner the plant is in. The clock is time
+    alone: not the material, not the answers, not how far anything has grown.
+    About half of any session is the world as it is; the rest is one of these.
+  </p>
+  <div class="grid" id="eras"></div>
+
+  <h2>Scenes</h2>
+  <p>Twelve backdrops, independent of the material the plant happens to be in.</p>
+  <div class="grid" id="scenes"></div>
+
+  <script type="module" src="src/gl/devguide.js"></script>
+</body>
+</html>

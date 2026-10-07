@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "flower",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.js", "5173"],
+      "port": 5173
+    },
+    {
+      "name": "flower-quiet",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["tools/serve.js", "5173", "tools/quiet.html"],
+      "port": 5173
+    }
+  ]
+}

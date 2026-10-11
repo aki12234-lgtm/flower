@@ -14,7 +14,12 @@ import { MATERIALS } from '../src/materials.js';
 import { buildPlant, buildBackdrop, PLACES, setDisplacement, setStyle, STEM_DRAWN } from '../src/gl/scene.js';
 import { partBoxes, segBoxDist, boxesOverlap, PART_WIDTH, PART_BAND } from '../src/growth.js';
 import { ENVIRONMENTS } from '../src/environment.js';
+import { Renderer3D } from '../src/gl/renderer3d.js';
+import { buildFlatPlant } from '../src/flat/plant2d.js';
+import { Renderer2D } from '../src/flat/renderer2d.js';
+import { PLANT_SET } from '../src/flat/ink.js';
 import { readFileSync } from 'fs';
+import vm from 'vm';
 
 let passed = 0;
 const failures = [];
@@ -950,6 +955,147 @@ check('every place builds without a NaN in it', () => {
     if (n) bad.push(PLACES[i].id + ': ' + n);
   }
   return bad.length ? 'NaN vertex data in ' + bad.join(', ') : null;
+});
+
+// ------------------------------------------------------- the flat renderer --
+//
+// v4 draws the same game in two dimensions (src/flat). There is no canvas
+// here, so it is run against a stand-in that keeps nothing and checks
+// everything it is handed: a NaN in a path is drawn as nothing at all, without
+// an error, which is how the 3D world once lost every tube it had (above).
+
+const nonFinite = [];
+const finite = (name) => (...args) => {
+  for (const a of args) if (typeof a === 'number' && !Number.isFinite(a)) { nonFinite.push(name); return; }
+};
+globalThis.Path2D = class {
+  constructor() {
+    for (const m of ['moveTo', 'lineTo', 'arc', 'ellipse', 'quadraticCurveTo', 'bezierCurveTo', 'rect']) this[m] = finite('Path2D.' + m);
+  }
+  closePath() {}
+};
+function stubCanvas(w, h) {
+  const state = {};
+  const ctx = new Proxy(state, {
+    get(t, k) { return k in t ? t[k] : finite('ctx.' + String(k)); },
+    set(t, k, v) {
+      if (typeof v === 'number' && !Number.isFinite(v)) nonFinite.push('ctx.' + String(k) + ' =');
+      t[k] = v;
+      return true;
+    },
+  });
+  return { width: w, height: h, clientWidth: w, clientHeight: h, getContext: () => ctx, toDataURL: () => 'data:,' };
+}
+
+check('the flat renderer frames the plant where the 3D one does', () => {
+  // main.js frames everything through the renderer's own camera rules, so the
+  // two have to agree: exactly with the camera level. Where it tilts down at
+  // something lower than the eye can go, a lens leans the picture and a flat
+  // drawing only slides it, which is out by a few pixels towards the edges —
+  // a fiftieth of the frame is the most it may be (v4 hit-tests through its
+  // own projection, so it always agrees with itself).
+  const flat = new Renderer2D(stubCanvas(1024, 640), { width: 1024, height: 640, dpr: 1 });
+  const solid = { w: 1024, h: 640, worldKind: 0, get eyeFloor() { return 90; }, lens: Renderer3D.prototype.lens };
+  const worst = { level: 0, tilted: 0 };
+  for (const cam of [{ x: 0, y: 900, zoom: 1 }, { x: 300, y: 2400, zoom: 0.5 }, { x: -800, y: 5000, zoom: 0.2 },
+    { x: 0, y: -165, zoom: 1 }, { x: 100, y: 40, zoom: 1.4 }]) {
+    for (const [px, py] of [[0, cam.y], [120, cam.y + 80], [-300, cam.y - 200]]) {
+      const a = flat.project(cam, px, py);
+      const b = Renderer3D.prototype.project.call(solid, cam, px, py);
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      const kind = cam.y >= 90 ? 'level' : 'tilted';
+      worst[kind] = Math.max(worst[kind], d);
+    }
+  }
+  if (worst.level > 0.01) return `level camera off by ${worst.level.toFixed(3)} px`;
+  if (worst.tilted > 640 / 50) return `tilted camera off by ${worst.tilted.toFixed(2)} px`;
+  return null;
+});
+
+check('the flat plant is made of finite shapes in the plant\'s own inks', () => {
+  const games = [['flat-1', 'flat-1', 24], ['flat-2', 'flat-x', 40], ['flat-3', 'flat-3', 8]];
+  for (const [seed, growth, turns] of games) {
+    const e = playGame(seed, growth, (p, i) => (p.options ? { index: i % p.options.length } : { t: (i * 0.37) % 1 }), turns);
+    const shapes = buildFlatPlant(e.plant);
+    if (!shapes.length) return `${seed}: no shapes`;
+    for (const s of shapes) {
+      if (!PLANT_SET.includes(s.ink)) return `${seed}: a ${s.type} printed in an ink the plant does not have`;
+      const nums = s.type === 'disc' ? [s.x, s.y, s.r] : s.pts.flatMap((p) => [p.x, p.y, p.l ?? 0, p.r ?? 0]);
+      if (nums.some((n) => !Number.isFinite(n))) return `${seed}: a ${s.type} with a non-finite coordinate`;
+    }
+  }
+  return null;
+});
+
+check('a section grown in flat ends as the same shapes it settles into', () => {
+  // the growing section is made on its own every frame; arrived, it has to be
+  // what the whole plant makes of it, or the last frame of growth jumps
+  const e = playGame('flat-grow', 'flat-grow', (p, i) => (p.options ? { index: (i * 3) % p.options.length } : { t: 0.6 }), 18);
+  const step = e.plant.sections[e.plant.sections.length - 1].step;
+  const reveal = { step, progress: 1 };
+  const parts = buildFlatPlant(e.plant, reveal, 'settled').length + buildFlatPlant(e.plant, reveal, 'growing').length;
+  const whole = buildFlatPlant(e.plant).length;
+  return parts === whole ? null : `${parts} shapes in parts, ${whole} whole`;
+});
+
+check('every place draws flat without a NaN, day and night, near and far', () => {
+  const e = playGame('flat-world', 'flat-world', (p, i) => (p.options ? { index: i % p.options.length } : { t: 0.4 }), 30);
+  const step = e.plant.sections[e.plant.sections.length - 1].step;
+  const r = new Renderer2D(stubCanvas(900, 700),
+    { width: 900, height: 700, dpr: 1.5, makeCanvas: (w, h) => stubCanvas(w, h) });
+  const cams = [{ x: 0, y: -165, zoom: 1 }, { x: 200, y: 900, zoom: 1 }, { x: -500, y: 6000, zoom: 0.4 },
+    { x: 0, y: 700, zoom: 0.08 }, { x: 60, y: 300, zoom: 1.8 }];
+  nonFinite.length = 0;
+  for (let k = 0; k < PLACES.length; k++) {
+    for (const night of [0, 0.5, 1]) {
+      r.setWorld(k, night, 0);
+      for (const cam of cams) {
+        r.fixedScale = false;
+        r.render(e.plant, cam, 4000 + k * 777, e.plant.sections, null);
+        r.render(e.plant, cam, 4100 + k * 777, e.plant.sections, { step, progress: 0.4 });
+        // and held still: the kept picture, then frames drawn over it
+        r.fixedScale = true;
+        for (let f = 0; f < 3; f++) r.render(e.plant, cam, 4200 + k * 777 + f * 500, e.plant.sections, null);
+      }
+    }
+  }
+  return nonFinite.length ? `non-finite numbers handed to ${[...new Set(nonFinite)].join(', ')}` : null;
+});
+
+check('switch.js keeps v2\'s plant apart and shares v3\'s with v4', () => {
+  // a page per version, each with the switch script and nothing else
+  const src = readFileSync(new URL('../switch.js', import.meta.url), 'utf8');
+  const page = (version, href) => {
+    class Storage {
+      constructor() { this.m = new Map(); }
+      getItem(k) { return this.m.has(String(k)) ? this.m.get(String(k)) : null; }
+      setItem(k, v) { this.m.set(String(k), String(v)); }
+      removeItem(k) { this.m.delete(String(k)); }
+    }
+    const el = () => ({ attrs: {}, children: [], dataset: {}, setAttribute(k, v) { this.attrs[k] = v; },
+      append(c) { this.children.push(c); }, prepend(c) { this.children.unshift(c); } });
+    const overlay = el();
+    const document = {
+      readyState: 'complete', currentScript: { src: 'https://example.github.io/flower/switch.js', dataset: { version } },
+      head: el(), body: el(), createElement: el, getElementById: (id) => (id === 'overlay' ? overlay : null),
+      addEventListener() {},
+    };
+    const ctx = { document, location: new URL(href), URL, URLSearchParams, Storage };
+    ctx.window = ctx;
+    vm.createContext(ctx);
+    vm.runInContext('var localStorage = new Storage();', ctx);
+    vm.runInContext(src, ctx);
+    return { store: vm.runInContext('localStorage', ctx), nav: overlay.children[0] };
+  };
+  const v2 = page('v2', 'https://example.github.io/flower/v2/');
+  v2.store.setItem('flower.save.v1', 'x');
+  if (v2.store.m.has('flower.save.v1')) return 'v2 wrote over the save v3 keeps';
+  const v4 = page('v4', 'https://example.github.io/flower/v4/');
+  v4.store.setItem('flower.save.v1', 'y');
+  if (v4.store.m.get('flower.save.v1') !== 'y') return 'v4 keeps a save of its own instead of v3\'s';
+  const links = v4.nav.children.map((a) => a.href || 'here');
+  const want = ['https://example.github.io/flower/v2/', 'https://example.github.io/flower/', 'here'];
+  return links.join() === want.join() ? null : `the switch on v4 links ${links.join(', ')}`;
 });
 
 // ------------------------------------------------------------------ report --

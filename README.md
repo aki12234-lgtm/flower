@@ -17,18 +17,62 @@ It is online at <https://aki12234-lgtm.github.io/flower/>, served by GitHub
 Pages straight from this repository: whatever is pushed to `main` is what is
 played, a minute or so later.
 
-Two versions of it are up, and the switch in the top right corner moves between
-them:
+Three versions of it are up, and the switch in the top right corner moves
+between them:
 
 | | |
 |---|---|
 | **v3**, `/` | the live game, printed in flat inks |
+| **v4**, `/v4/` | the same game drawn flat: v3's pictures on a plain 2D canvas, with no 3D at all (below) |
 | **v2**, `/v2/` | the lit, realistic line as it stood before v3 — `versions/v2-real`, frozen |
 
-Each keeps a plant of its own. On one site they share one `localStorage`, and a
-save written by one version is not something the other can carry on from, so
-`switch.js` files v2's under a name of its own; going across to look at the
-other version and coming back costs nothing.
+v2 keeps a plant of its own. On one site every version shares one
+`localStorage`, and a save written by one is not something another can carry on
+from, so `switch.js` files v2's under a name of its own; going across to look at
+it and coming back costs nothing. v3 and v4 are one game with two renderers, so
+they keep one plant between them: going across shows the same plant drawn the
+other way.
+
+### v4: the illustrated look, drawn flat
+
+v3 is printed from a 3D renderer: real geometry, every surface matched to the
+nearest of a place's inks pixel by pixel, the ink lines found afterwards from
+where colour and depth break — and with the plant pressed to a twelfth of its
+depth, no light, no shadow, and a camera that only ever pans and zooms. Almost
+none of what makes it 3D is left in the picture. So v4 draws the same picture in
+two dimensions (`src/flat`), on an ordinary canvas, and the rest of the game —
+rules, prompts, growth, names, the camera's framing — is untouched: `main.js`
+asks the page which renderer to load (`data-renderer="flat"` on v4's).
+
+- **The plant** (`plant2d.js`) is `buildPlant` again, part for part, kind for
+  kind, but each tube is the band it makes seen from the front, each sphere a
+  disc, each petal and leaf the outline of the blade. Every shape is given its
+  ink once, when it is made, by the shader's own rule (`ink.js`) — so the inks,
+  and the two-tone petals and the stems that turn at their nodes, come out
+  where they did. Material patterns are drawn along each stem as marks.
+- **Lines are strokes.** Shapes of one ink are stroked twice a line's width and
+  then filled, all together (`paint.js`), which leaves exactly one line round
+  the outside of the group and none inside it: the print's rule that a line
+  goes where one ink meets another. The plant's heavier line is one stroke round
+  all of it.
+- **The world** (`world2d.js`, `moving2d.js`) is every place's things — ground,
+  ranges, sea, cloud, trees, rocks, coral, the cave, and every bird, fish, deer
+  and butterfly, on the same courses — each drawn flat and stood at its own
+  distance, placed and scaled by the 3D lens's numbers and laid down furthest
+  first. The ground is rows across it, with a line only where a row hides land
+  behind it; a range's faces turned from the light get the flat second pass of
+  their ink, as in print.
+- **Holding still costs almost nothing.** While the player reads a question,
+  the picture is kept and only what moves is drawn over it — with whatever
+  stands in front of each moving thing laid down again over just that thing,
+  so a deer still walks behind the trunks. An idle frame is under a
+  millisecond in most places.
+
+It needs no WebGL, so there is no shader to compile — the step that took most
+of v3's start and could reset a graphics card — and it runs where WebGL does
+not. `node tools/test.js` checks that it frames the plant where v3 does, that
+every place draws without a NaN by day, dusk and night, near and far, and that
+a section grown in flat ends as the shapes it settles into.
 
 ## Running it
 
@@ -77,12 +121,13 @@ node tools/simulate.js 60 24
 | `/` | the game |
 | `/?sandbox` | a throwaway game that never touches your saved one |
 | `/v2/` | v2, the lit version before v3, with a saved game of its own |
+| `/v4/` | v4, the game drawn flat on a 2D canvas, sharing v3's saved game |
 | `/gl.html` | the 3D renderer, six plants side by side |
 | `/dev.html` | the older 2D renderer, same six plants, for comparison |
 | `/guide.html` | the field guide: every botanical kind, material and scene. `?only=kinds`, `?cell=155`, `?snap=1` saves a contact sheet |
 | `/mat.html` | the materials sheet: one plant, every substance, side by side |
 | `/selftest.html` | browser checks (23), all against the 3D path the game actually uses |
-| `node tools/test.js` | rule-level assertions (41 of them) |
+| `node tools/test.js` | rule-level assertions (46 of them, five of them on v4) |
 | `node tools/names.js` | plays games and prints the cultivar names they end with, and where each word came from |
 | `node tools/simulate.js` | plays thousands of games and reports the balance |
 | `node tools/tune.js` | raw strain distributions with damage switched off, for setting thresholds |
@@ -1443,6 +1488,16 @@ src/main.js                   bootstrap, camera, input, saving
 src/dev.js  src/selftest.js   the extra pages
 src/gl/devgl.js devmat.js     the 3D comparison grid and the materials sheet
 src/gl/devguide.js            the field guide
+
+src/flat/renderer2d.js        v4: the flat renderer — lens, sky, the kept picture
+src/flat/plant2d.js           v4: the plant as bands, discs and outlines
+src/flat/world2d.js           v4: every place, flat, stood at its distances
+src/flat/moving2d.js          v4: birds, fish, deer, butterflies, tumbleweed
+src/flat/paint.js             v4: lines, shade sides and material patterns
+src/flat/ink.js  shapes.js    v4: choosing inks; the three kinds of shape
+
+switch.js                     the version switch, and v2's saved game kept apart
+v2/  v4/                      the ways in to v2 and v4
 
 tools/serve.js                static server
 tools/test.js                 rule assertions

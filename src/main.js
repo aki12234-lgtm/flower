@@ -1,7 +1,6 @@
 // Bootstrap, camera, input, and the turn loop.
 
 import { Engine, SAVE_KEY, ARCHIVE_KEY } from './engine.js';
-import { Renderer3D } from './gl/renderer3d.js';
 import { support } from './gl/glutil.js';
 import { UI } from './ui.js';
 import { clamp, lerp } from './rng.js';
@@ -29,6 +28,16 @@ if (new URLSearchParams(location.search).has('reset')) {
 
 const canvas = document.getElementById('stage');
 
+// Which renderer draws the plant: the 3D one (v3, printed from real geometry),
+// or, where the page asks for it, the flat one (v4, the same pictures drawn in
+// two dimensions on a plain canvas, with no WebGL at all). The rest of the game
+// is the same game either way. Fetched now, so it arrives while the first
+// question goes up.
+const FLAT = document.documentElement.dataset.renderer === 'flat';
+const rendererModule = FLAT ? import('./flat/renderer2d.js') : import('./gl/renderer3d.js');
+// (if it cannot be had, boot() says so on the page; the console need not first)
+rendererModule.catch(() => {});
+
 /**
  * Say so when the renderer cannot start.
  *
@@ -39,7 +48,8 @@ const canvas = document.getElementById('stage');
  * anything, least of all the person it happened to.
  */
 function reportFailure(err) {
-  const s = support();
+  // the flat renderer has no WebGL to report on, and asking would open some
+  const s = FLAT ? { renderer: 'Canvas 2D' } : support();
   const detail = [
     err && err.message ? err.message : String(err),
     err && err.stack ? err.stack : '',
@@ -58,10 +68,12 @@ function reportFailure(err) {
   h.textContent = 'This machine cannot run the renderer';
   h.style.cssText = 'font:400 24px/1.3 Georgia,serif;margin:0 0 12px';
   const p = document.createElement('p');
-  p.textContent = s.webgl2
-    ? 'The browser has WebGL 2 but is missing something the renderer needs.'
-    : 'The browser could not open WebGL 2. That is usually hardware acceleration '
-      + 'being switched off in the browser settings, or a very old browser.';
+  p.textContent = FLAT
+    ? 'The flat renderer stopped with the error below.'
+    : s.webgl2
+      ? 'The browser has WebGL 2 but is missing something the renderer needs.'
+      : 'The browser could not open WebGL 2. That is usually hardware acceleration '
+        + 'being switched off in the browser settings, or a very old browser.';
   p.style.cssText = 'color:rgba(242,236,224,0.75);margin:0 0 16px';
   const pre = document.createElement('pre');
   pre.textContent = detail;
@@ -154,7 +166,8 @@ function startFresh() {
   ui.reset();
   engine = new Engine(String(Date.now()) + ':' + Math.floor(Math.random() * 1e9));
   engine.start();
-  renderer.invalidate();
+  // (the renderer arrives a moment after the page: a restart before then has nothing to clear)
+  renderer?.invalidate();
   mode = 'asking';
   growing = null;
   selected = null;
@@ -343,7 +356,7 @@ function clampCamera() {
 }
 
 function updateReturnChip() {
-  if (mode === 'looking' || mode === 'specimen' || mode === 'reflection') return;
+  if (!renderer || mode === 'looking' || mode === 'specimen' || mode === 'reflection') return;
   const t = nowTarget();
   const away = Math.abs(cam.ty - t.y) > AWAY_THRESHOLD || Math.abs(cam.tz - 1) > 0.05;
   ui.setReturnVisible(cam.free && away);
@@ -502,6 +515,8 @@ window.flower = {
       requestAnimationFrame((t) => {
         try {
           draw(t);
+          // a 2D canvas keeps what it drew, and can say so itself
+          if (renderer.capture) { renderer.capture().then(resolve, reject); return; }
           const gl = renderer.gl;
           const w = canvas.width;
           const h = canvas.height;
@@ -612,10 +627,13 @@ function loadSaved() {
  * prompt come up straight away, and the plant arrives when the shaders are
  * ready.
  */
-function boot() {
+async function boot() {
   try {
-    // ?style=real shows the lit look v3 was drawn over, for comparing
-    renderer = new Renderer3D(canvas, { style: new URLSearchParams(location.search).get('style') || 'toon' });
+    const m = await rendererModule;
+    renderer = FLAT
+      ? new m.Renderer2D(canvas)
+      // ?style=real shows the lit look v3 was drawn over, for comparing
+      : new m.Renderer3D(canvas, { style: new URLSearchParams(location.search).get('style') || 'toon' });
   } catch (err) {
     reportFailure(err);
     return;

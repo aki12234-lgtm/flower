@@ -3389,3 +3389,10 @@ function hexToLinear(hex) {
 }
 
 export { hexToLinear, ENVIRONMENTS };
+
+// For the flat renderer (v4, src/flat), which draws the same plant and the same
+// places in two dimensions and must agree with this file about every colour.
+export {
+  hslToRgb, PIGMENT, reliefFor, stemColour, flowerHueFor, bloomColour, eyeColour,
+  shoreAt, TOON_GROUND, TRUNK_INKS, NEAR_Z, FAR_Z,
+};

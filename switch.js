@@ -1,8 +1,10 @@
-// Which version of the game a page is, and a way across to the other one.
+// Which version of the game a page is, and a way across to the others.
 //
-// The site carries two. v3, at the root, is the live game, printed in flat
-// inks. v2, under v2/, is the lit, realistic line as it stood before v3 was
-// drawn over it: versions/v2-real, frozen, served exactly as it is.
+// The site carries three. v3, at the root, is the live game, printed in flat
+// inks. v4, under v4/, is the same game drawn flat: the same source, with a 2D
+// renderer in place of the 3D one. v2, under v2/, is the lit, realistic line as
+// it stood before v3 was drawn over it: versions/v2-real, frozen, served
+// exactly as it is.
 //
 //   <script src="switch.js" data-version="v3"></script>
 //
@@ -10,11 +12,12 @@
 // because it has to have run before main.js reads the saved game (see below).
 
 (() => {
-  // Where each version lives, from the site root. The one at the root is the
-  // live game, and keeps the save it has always had.
+  // Where each version lives, from the site root, and whose saved game it
+  // keeps: `own` for one of its own, otherwise the one the root has always had.
   const VERSIONS = [
-    { id: 'v2', path: 'v2/', title: 'v2: the lit, realistic look' },
+    { id: 'v2', path: 'v2/', own: true, title: 'v2: the lit, realistic look' },
     { id: 'v3', path: '', title: 'v3: the illustrated look, printed in flat inks' },
+    { id: 'v4', path: 'v4/', title: 'v4: the illustrated look, drawn flat, with no 3D' },
   ];
 
   const script = document.currentScript;
@@ -22,7 +25,7 @@
   if (!me) return;
   const root = new URL('.', script.src);
 
-  // One plant per version.
+  // One plant per version — except where two versions are one game.
   //
   // Every version keeps its game under the same localStorage key, and on one
   // site they all share one localStorage. A save is not something another
@@ -30,9 +33,14 @@
   // older rules (or, failing to read it, starts a new one) and saves the result
   // over the top, so going across to look at the other version would cost the
   // player the plant they came from. The frozen versions are not edited to use
-  // keys of their own; their keys are moved for them instead. Anywhere but the
-  // root, every 'flower.' key is read and written under that version's name.
-  if (me.path && window.Storage) {
+  // keys of their own; their keys are moved for them instead: on a page whose
+  // version keeps its `own`, every 'flower.' key is read and written under
+  // that version's name.
+  //
+  // v4 is v3's own code with another renderer, so a v3 save is a v4 save: they
+  // share one, and going across shows the same plant drawn the other way. If
+  // their rules ever part, v4 wants `own` too.
+  if (me.own && window.Storage) {
     const proto = Storage.prototype;
     for (const name of ['getItem', 'setItem', 'removeItem']) {
       const original = proto[name];

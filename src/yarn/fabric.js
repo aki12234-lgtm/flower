@@ -26,7 +26,7 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const mod = (a, n) => ((a % n) + n) % n;
 
 /** One knitted stitch, in CSS pixels. */
-const STITCH = [10, 8.5];
+const STITCH = [9, 6.5];
 
 /** HSL (degrees, percent, percent) to sRGB 0..1. */
 function rgbOf(h, s, l) {
@@ -53,60 +53,78 @@ float vnoise(vec2 p) {
              mix(hash21(i + vec2(0, 1)), hash21(i + vec2(1, 1)), f.x), f.y);
 }
 /**
- * Stocking stitch, as a height: p in stitches, x across the row and y up the
- * work. Each stitch is a V, two legs of yarn leaning out from the bottom of the
- * cell, and each leg runs on past the top of its own cell into the row above,
- * which is what makes knitting a fabric and not a pattern of marks. A leg is
- * round in section and twisted from plies.
+ * Stocking stitch. Knitting is not a grid of marks: it is loops pulled through
+ * loops. What shows of each loop on the right side is a V, two legs of yarn
+ * that rise out between the legs of the stitch below, lean apart, and go under
+ * the foot of the stitch above. So the rows have no edge to them at all, and
+ * what the eye follows is the columns, braided.
+ *
+ * m is in stitch widths both ways (a row is uRow of one high), y up the work.
+ * Returns the height of the yarn there, 0..1; who is the stitch it belongs to
+ * (column, row), and uv where on the leg it is (across -1..1, along).
  */
-float stitches(vec2 p) {
-  vec2 cell = floor(p);
-  vec2 f = p - cell;
-  float h = 0.0;
-  for (int dy = 0; dy <= 1; dy++) {
-    float t = f.y + float(dy);
-    if (t > 1.42) continue;
+uniform float uRow;
+float knit(vec2 m, out vec2 who, out vec2 uv) {
+  vec2 cell = vec2(floor(m.x), floor(m.y / uRow));
+  float best = 0.0, top = 0.0;
+  who = cell; uv = vec2(0.0);
+  for (int dy = -1; dy <= 1; dy++) {
     for (int dx = -1; dx <= 1; dx++) {
-      float jit = (hash21(cell + vec2(float(dx), -float(dy))) - 0.5) * 0.10;
+      vec2 id = cell + vec2(float(dx), float(dy));
+      // no two stitches are pulled alike
+      vec2 j = vec2(hash21(id + 1.7), hash21(id + 9.1)) - 0.5;
+      vec2 base = vec2(id.x + 0.5 + j.x * 0.09, (id.y + j.y * 0.10) * uRow);
+      float fat = 1.0 + (hash21(id + 4.3) - 0.5) * 0.14;
       for (int sd = -1; sd <= 1; sd += 2) {
         float side = float(sd);
-        float cx = 0.5 + float(dx) + jit + side * (0.07 + 0.36 * t - 0.07 * t * t);
-        float d = abs(f.x - cx);
-        float w = 0.275 * (1.0 - 0.18 * smoothstep(1.0, 1.42, t));
-        if (d > w) continue;
-        float round_ = sqrt(1.0 - (d / w) * (d / w));
-        float ply = 0.5 + 0.5 * sin((t * 4.6 + side * (f.x - cx) / w * 1.25) * 6.2832);
-        float lift = dy == 0 ? 1.0 : 0.80;
-        h = max(h, round_ * lift * (0.84 + 0.16 * ply));
+        vec2 A = base + vec2(side * 0.115, -0.30 * uRow);
+        vec2 B = base + vec2(side * 0.375, 1.12 * uRow);
+        vec2 ab = B - A;
+        float t = clamp(dot(m - A, ab) / dot(ab, ab), 0.0, 1.0);
+        // a leg bows out a little on its way up
+        vec2 c = A + ab * t + vec2(side * 0.03 * sin(t * 3.1416), 0.0);
+        // loose fibre: the edge of a leg is never a clean line
+        c += (vec2(vnoise(m * 14.0 + id), vnoise(m * 14.0 - id)) - 0.5) * 0.035;
+        vec2 dv = m - c;
+        float r = 0.225 * fat * (0.86 + 0.20 * sin(t * 3.1416));
+        float d = length(dv);
+        if (d > r) continue;
+        float u = dot(dv, normalize(vec2(ab.y, -ab.x))) / r;
+        float along = t * length(ab) / 0.205;
+        float prof = sqrt(1.0 - (d / r) * (d / r));
+        // two plies twisted together: the slanting ridges down each leg
+        float ply = cos((along * 0.50 - side * u * 0.36) * 6.2832);
+        // high where it comes out over the stitch below, low where it goes under the one above
+        float z = prof * (1.0 - 0.50 * t) + 0.02 * float(dy + 1);
+        if (z > best) { best = z; top = prof * (1.0 - 0.22 * t) * (0.84 + 0.16 * ply); who = id; uv = vec2(u, along); }
       }
     }
   }
-  return h;
+  return top;
 }
-/** The yarn's surface at p: stitches, the yarn behind the gaps, and its own fuzz. */
-float yarnH(vec2 p, float fine) {
-  float fuzz = vnoise(p * 7.0 * fine) * 0.6 + vnoise(p * 19.0 * fine) * 0.4;
-  return max(stitches(p), 0.20) * 0.92 + fuzz * 0.08;
+float yarnH(vec2 m, out vec2 who, out vec2 uv) {
+  float fuzz = vnoise(m * 9.0) * 0.6 + vnoise(m * 23.0) * 0.4;
+  return max(knit(m, who, uv), 0.16) * 0.90 + fuzz * 0.10;
 }
 vec3 toLinear(vec3 c) { return pow(c, vec3(2.2)); }
 /**
  * Wool under a raking light. n is the surface normal (z towards the eye, y
  * down the screen), h its height, p where on the yarn we are.
  */
-vec3 wool(vec3 dye, vec3 n, float h, vec2 p) {
+vec3 wool(vec3 dye, vec3 n, float h, vec2 uv) {
   vec3 L = normalize(vec3(-0.50, -0.58, 0.64));
   float ndl = dot(n, L);
   // wool wraps light round itself: no hard terminator
-  float diff = clamp(ndl * 0.72 + 0.28, 0.0, 1.0);
-  // down between two stitches very little arrives
-  float cav = mix(0.26, 1.0, smoothstep(0.16, 0.74, h));
+  float diff = clamp(ndl * 0.66 + 0.34, 0.0, 1.0);
+  // down between the legs very little arrives, and what does is the yarn's own colour
+  float cav = mix(0.30, 1.0, smoothstep(0.10, 0.62, h));
   vec3 c = dye;
-  // loose fibres lying across the stitches, paler than the yarn under them
-  float fib = smoothstep(0.60, 0.95, vnoise(p * vec2(3.0, 17.0)) * vnoise(p * vec2(21.0, 4.0) + 7.0) * 2.5);
-  c = mix(c, c * 1.30 + 0.04, fib * 0.40);
-  vec3 lit = c * (0.30 + 0.92 * diff) * cav;
-  // and the fibre catches light at a grazing angle: the pale edge every leg has
-  lit += c * pow(1.0 - clamp(n.z, 0.0, 1.0), 1.7) * 0.42 * (0.4 + diff);
+  // the fibres lie along the yarn: fine streaks down each leg, some paler
+  float fib = vnoise(vec2(uv.x * 5.0, uv.y * 0.8) + 3.0) * vnoise(vec2(uv.x * 11.0, uv.y * 1.7) + 7.0);
+  c *= 0.84 + 0.60 * fib;
+  vec3 lit = c * (0.32 + 0.86 * diff) * cav;
+  // and the halo of loose fibre catches light at a grazing angle
+  lit += c * pow(1.0 - clamp(n.z, 0.0, 1.0), 1.6) * 0.34 * (0.4 + diff);
   return lit;
 }`;
 
@@ -121,21 +139,31 @@ uniform vec2 uOrigin;   // where cell (0,0) starts, in device pixels from the to
 uniform vec2 uCell;     // a stitch, in device pixels
 uniform vec2 uRes;
 out vec4 outColour;
+ivec2 texel(vec2 who, ivec2 size) {
+  return clamp(ivec2(int(who.x), -int(who.y) - 1), ivec2(0), size - 1);
+}
 void main() {
   vec2 px = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y);
   vec2 q = (px - uOrigin) / uCell;
-  vec2 p = vec2(q.x, -q.y);                         // stitch space: y up the work
-  // A stitch is one colour, and a stitch is its V: the legs lean out over the
-  // cells either side, so a pixel belongs to whichever stitch's leg it is on.
-  vec2 f = fract(p);
-  float lean = (f.x - 0.5) * (0.5 + f.y);
+  vec2 m = vec2(q.x, -q.y * uRow);                  // y up the work, in stitch widths
+  // Knitted cloth never lies true: the columns wander and the rows sag a little.
+  m += vec2(vnoise(m * 0.11 + 3.0) - 0.5, vnoise(m * 0.09 + 17.0) - 0.5) * 0.55;
+  m += vec2(vnoise(m * 0.9 + 31.0) - 0.5, vnoise(m * 0.8 + 5.0) - 0.5) * 0.06;
+
+  vec2 who, uv, w2, u2;
+  float e = 0.045;
+  float h0 = yarnH(m, who, uv);
+  float gx = (yarnH(m + vec2(e, 0.0), w2, u2) - h0) / e;
+  float gy = (yarnH(m + vec2(0.0, e), w2, u2) - h0) / e;
+
+  // A stitch is one yarn, and the stitch is its V, not a square: so where two
+  // colours meet, they meet along the legs.
   ivec2 size = textureSize(uCells, 0);
-  ivec2 ci = clamp(ivec2(floor(q)), ivec2(0), size - 1);
+  ivec2 ci = texel(who, size);
   vec3 dye = toLinear(texelFetch(uCells, ci, 0).rgb);
-  // wool is not as loud as ink, and no two stitches take the dye alike
+  // wool is not as loud as ink
   float l = dot(dye, vec3(0.2126, 0.7152, 0.0722));
   dye = mix(vec3(l), dye, 0.88) * 0.94 + 0.012;
-  // the plant's stitches: its own yarn, and more of it
   vec4 pl = texelFetch(uPlant, ci, 0);
   float bulk = step(0.5, pl.a);
   if (bulk > 0.5) {
@@ -143,32 +171,25 @@ void main() {
     float pl2 = dot(dye, vec3(0.2126, 0.7152, 0.0722));
     dye = mix(vec3(pl2), dye, 1.06);
   }
-  dye *= 0.93 + 0.14 * hash21(floor(p) + 3.0);
+  // the dye does not take evenly: it drifts along the yarn, which runs with the row
+  dye *= 0.94 + 0.12 * vnoise(vec2(who.x * 0.35 + who.y * 13.7, who.y * 0.5));
+  dye *= 0.97 + 0.06 * hash21(who + 3.0);
 
-  float e = 0.07;
-  float h0 = yarnH(p, 1.0);
-  float gx = (yarnH(p + vec2(e, 0.0), 1.0) - h0) / e;
-  float gy = (yarnH(p + vec2(0.0, e), 1.0) - h0) / e;
-  // (stitch space has y up; the screen, and the light, have it down)
-  // (the same stitch as the ground's: any wider and the legs close up into a flat block)
-  float proud = 1.0;
-  vec3 n = normalize(vec3(-gx * 0.85 * proud, gy * 0.85 * proud, 1.0));
-  vec3 c = wool(dye, n, h0, p);
-  // Heavier yarn stands above the ground it is worked into, so the stitches
-  // beside it, away from the light, sit in its shade, and the ones towards the
-  // light are pressed down against it. No more than that: it is in the cloth.
+  // (m has y up; the screen, and the light, have it down)
+  vec3 n = normalize(vec3(-gx * 0.50, gy * 0.50, 1.0));
+  vec3 c = wool(dye, n, h0, uv);
+  // The plant is the same cloth in another yarn. It sits a hair fuller than
+  // the ground, enough to lay a little shade on the stitches down-light of it.
   if (bulk < 0.5) {
     float a = texelFetch(uPlant, clamp(ci + ivec2(-1, -1), ivec2(0), size - 1), 0).a;
     float b = texelFetch(uPlant, clamp(ci + ivec2(-1, 0), ivec2(0), size - 1), 0).a;
     float d2 = texelFetch(uPlant, clamp(ci + ivec2(0, -1), ivec2(0), size - 1), 0).a;
-    float e2 = texelFetch(uPlant, clamp(ci + ivec2(1, 0), ivec2(0), size - 1), 0).a;
-    float f2 = texelFetch(uPlant, clamp(ci + ivec2(0, 1), ivec2(0), size - 1), 0).a;
-    c *= 1.0 - 0.30 * max(a, max(b, d2)) - 0.10 * max(e2, f2);
-  } else c *= 1.08;
+    c *= 1.0 - 0.16 * max(a, max(b, d2));
+  }
   // cloth never lies quite flat
-  c *= 0.90 + 0.20 * vnoise(p * 0.045 + 11.0);
-  vec2 uv = px / uRes - 0.5;
-  c *= 1.0 - smoothstep(0.35, 0.95, length(uv * vec2(1.0, 1.15))) * 0.30;
+  c *= 0.88 + 0.24 * vnoise(m * 0.05 + 11.0);
+  vec2 sc = px / uRes - 0.5;
+  c *= 1.0 - smoothstep(0.35, 0.95, length(sc * vec2(1.0, 1.15))) * 0.30;
   outColour = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
 }`;
 
@@ -273,6 +294,7 @@ export class RendererYarn {
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uOrigin'), grid.x0, grid.y0);
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uCell'), cw, ch);
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uRes'), this.pw, this.ph);
+    gl.uniform1f(gl.getUniformLocation(this.cloth, 'uRow'), ch / cw);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     const qa = gl.getAttribLocation(this.cloth, 'aPos');
     gl.enableVertexAttribArray(qa);

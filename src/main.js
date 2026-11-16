@@ -58,7 +58,7 @@ const load = {
   gl: () => import('./gl/renderer3d.js'),
   v1: () => import('../versions/v1/src/gl/renderer3d.js'),
   made: () => import('./flat/crafted.js'),
-  yarn: () => import('./yarn/renderer3d.js'),
+  yarn: () => import('./yarn/fabric.js'),
 };
 const modules = {};
 const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());
@@ -719,7 +719,8 @@ async function useLook(id, first = false) {
     try {
       renderers[kind] = kind === 'flat' ? new m.Renderer2D(c)
         : kind === 'made' ? new m.RendererCrafted(c, { mode: next.id })
-          : new m.Renderer3D(c);
+          : kind === 'yarn' ? new m.RendererYarn(c)
+            : new m.Renderer3D(c);
     } catch (err) {
       // a canvas that failed to give a context is no use to a second try
       if (c !== canvas) { c.remove(); delete stages[kind]; }

@@ -136,59 +136,81 @@ export class RendererCrafted extends Renderer2D {
 
   // ------------------------------------------------------------------ type --
 
-  /** The page of small type, white on clear, as tall as the text runs. */
-  typeMask(g) {
-    const cols = g.cols;
-    const key = [cols, g.cw, g.ch, this.words].join('|');
-    if (this.maskKey === key) return this.mask;
-    this.maskKey = key;
-    const rows = layoutText(this.words || '...', cols).slice(0, 160);
-    const mask = canvasOf(cols * g.cw, rows.length * g.ch);
-    const mc = mask.getContext('2d');
-    mc.fillStyle = '#fff';
-    mc.font = `600 ${Math.round(g.ch * 0.86)}px ${MONO}`;
-    mc.textAlign = 'center';
-    mc.textBaseline = 'middle';
-    rows.forEach((row, y) => {
-      for (let x = 0; x < cols; x++) {
-        if (row[x] !== ' ') mc.fillText(row[x], (x + 0.5) * g.cw, (y + 0.5) * g.ch);
-      }
-    });
-    this.mask = mask;
-    return mask;
-  }
-
+  /**
+   * The world, typed. Nothing is behind the letters: the page is bare, and a
+   * shape is only where there are characters and how heavily they are set.
+   * Open sky is left empty. An edge between two things is drawn the way ASCII
+   * draws one, with the stroke that leans its way ( | _ / \ ), and what is
+   * inside an edge is filled with the running text of what was asked and
+   * answered, in one of three weights by how dark the thing is.
+   *
+   * Set again about ten times a second rather than every frame: a terminal
+   * redraws in steps, and twelve thousand characters is real work.
+   */
   typeWorld(ctx, v, g) {
     const W = this.pw;
     const H = this.ph;
-    if (!this.layer || this.layer.width !== W || this.layer.height !== H) this.layer = canvasOf(W, H);
-    const lc = this.layer.getContext('2d');
-    lc.setTransform(1, 0, 0, 1, 0, 0);
-    lc.globalCompositeOperation = 'source-over';
-    lc.imageSmoothingEnabled = false;
-    lc.drawImage(this.cells, g.x0, g.y0, g.cols * g.cw, g.rows * g.ch);
-    // the letters cut the colour: what is left is the world, written
-    const mask = this.typeMask(g);
-    lc.globalCompositeOperation = 'destination-in';
-    // rows fixed to the ground, so the page scrolls with the plant
     const first = Math.floor((v.H / 2 + v.lookY * v.zoom) * this.dpr / g.ch);
-    let y = g.y0 - mod(-first * g.ch, mask.height) ;
-    // one fill of clear where the mask does not reach, then the mask tiled down
-    const tiles = canvasOf(W, H);
-    const tc = tiles.getContext('2d');
-    for (; y < H; y += mask.height) tc.drawImage(mask, 0, y);
-    lc.drawImage(tiles, 0, 0);
-    lc.globalCompositeOperation = 'source-over';
-
-    ctx.fillStyle = PAGE;
-    ctx.fillRect(0, 0, W, H);
-    // the shapes themselves, very dimly, so a hill is still a hill behind its letters
-    ctx.imageSmoothingEnabled = false;
-    ctx.globalAlpha = 0.13;
-    ctx.drawImage(this.cells, g.x0, g.y0, g.cols * g.cw, g.rows * g.ch);
-    ctx.globalAlpha = 0.72;
+    const key = [W, H, g.cols, g.rows, g.y0, first, this.words.length, this.worldKind].join('|');
+    const now = v.time || 0;
+    if (!this.layer || this.layer.width !== W || this.layer.height !== H) { this.layer = canvasOf(W, H); this.typeKey = null; }
+    if (this.typeKey !== key || now - (this.typeAt || 0) > 95) {
+      this.typeKey = key;
+      this.typeAt = now;
+      const cols = g.cols;
+      const rows = g.rows;
+      const px = this.cells.getContext('2d', { alpha: false, willReadFrequently: true }).getImageData(0, 0, cols, rows).data;
+      const lum = new Float32Array(cols * rows);
+      for (let i = 0; i < cols * rows; i++) lum[i] = (px[i * 4] * 0.299 + px[i * 4 + 1] * 0.587 + px[i * 4 + 2] * 0.114) / 255;
+      // the sky is whatever the top row mostly is
+      // (the middle value of each channel, so a peak or a cloud up there does not tint it)
+      const sky = [0, 1, 2].map((c) => {
+        const vals = [];
+        for (let x = 0; x < cols; x++) vals.push(px[(cols + x) * 4 + c]);
+        return vals.sort((a, b) => a - b)[cols >> 1];
+      });
+      const far = (i, c) => Math.abs(px[i * 4] - c[0]) + Math.abs(px[i * 4 + 1] - c[1]) + Math.abs(px[i * 4 + 2] - c[2]);
+      const diff = (a, b) => Math.abs(px[a * 4] - px[b * 4]) + Math.abs(px[a * 4 + 1] - px[b * 4 + 1]) + Math.abs(px[a * 4 + 2] - px[b * 4 + 2]);
+      const text = layoutText(this.words || '...', cols);
+      const lc = this.layer.getContext('2d');
+      lc.setTransform(1, 0, 0, 1, 0, 0);
+      lc.fillStyle = PAGE;
+      lc.fillRect(0, 0, W, H);
+      lc.textAlign = 'center';
+      lc.textBaseline = 'middle';
+      const size = Math.round(g.ch * 0.9);
+      const TONES = ['#3d3d39', '#6f6d65', '#a19e92'];
+      // one weight at a time, so the font and the colour are set three times and not twelve thousand
+      const runs = [[], [], [], []];
+      for (let y = 1; y < rows - 1; y++) {
+        const line = text[mod(y - first, text.length)];
+        for (let x = 2; x < cols - 1; x++) {
+          const i = y * cols + x;
+          const dx = diff(i - 1, i + 1);
+          const dy = diff(i - cols, i + cols);
+          if (dx + dy > 150) {
+            // an edge: the stroke that runs along it
+            const sx = lum[i + 1] - lum[i - 1];
+            const sy = lum[i + cols] - lum[i - cols];
+            const chr = dx > dy * 2.2 ? '|' : dy > dx * 2.2 ? '_' : (sx * sy > 0 ? '/' : '\\');
+            runs[3].push(chr, x, y);
+            continue;
+          }
+          if (far(i, sky) < 70) continue;               // open sky: nothing is written
+          const chr = line[x];
+          if (chr === ' ') continue;
+          runs[lum[i] > 0.62 ? 0 : lum[i] > 0.36 ? 1 : 2].push(chr, x, y);
+        }
+      }
+      runs.forEach((run, t) => {
+        lc.font = `${t >= 2 ? 700 : 500} ${size}px ${MONO}`;
+        lc.fillStyle = t === 3 ? '#b4b0a3' : TONES[t];
+        for (let q = 0; q < run.length; q += 3) {
+          lc.fillText(run[q], g.x0 + (run[q + 1] + 0.5) * g.cw, g.y0 + (run[q + 2] + 0.5) * g.ch);
+        }
+      });
+    }
     ctx.drawImage(this.layer, 0, 0);
-    ctx.globalAlpha = 1;
   }
 
   /**
@@ -212,7 +234,7 @@ export class RendererCrafted extends Renderer2D {
       const kMax = growing ? reveal.progress * section.steps : Infinity;
       if (growing && reveal.progress <= 0) continue;
       const col = stemColour(section, makeRng(1013 + section.step * 7919));
-      const ink = hsl({ h: col.h, s: Math.max(col.s, 45), l: 78 });
+      const ink = '#ffffff';
       const said = section.promptText
         ? `${section.promptText} ${String(section.responseLabel || '').toUpperCase()} `
         : 'ONCE ';
@@ -250,7 +272,7 @@ export class RendererCrafted extends Renderer2D {
         const cx = p.x + Math.cos(node.angle) * R * 1.15;
         const cy = p.y - Math.sin(node.angle) * R * 1.15;
         const word = (String(section.responseLabel || 'yes').replace(/[^A-Za-z0-9]/g, '') || 'yes').toUpperCase();
-        const colour = hsl({ h: c.h, s: Math.max(c.s, 70), l: leaf ? 62 : 70 });
+        const colour = leaf ? '#ffffff' : hsl({ h: c.h, s: Math.max(c.s, 80), l: 66 });
         if (leaf) {
           const fs = clamp(R * 0.9, 11, 18);
           for (let i = 0; i < 3; i++) {
@@ -264,7 +286,7 @@ export class RendererCrafted extends Renderer2D {
           const a = (i / count) * Math.PI * 2 - Math.PI / 2;
           letter(word[i % word.length], cx + Math.cos(a) * R, cy + Math.sin(a) * R * 0.92, fs, colour);
         }
-        letter('*', cx, cy, fs * 1.25, '#fff6d8');
+        letter('@', cx, cy, fs * 1.2, '#ffffff');
       }
     }
     // where the writing has got to: a cursor at every growing end

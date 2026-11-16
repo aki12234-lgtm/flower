@@ -59,6 +59,7 @@ const load = {
   v1: () => import('../versions/v1/src/gl/renderer3d.js'),
   made: () => import('./flat/crafted.js'),
   yarn: () => import('./yarn/fabric.js'),
+  riso: () => import('./riso/press.js'),
 };
 const modules = {};
 const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());
@@ -720,6 +721,7 @@ async function useLook(id, first = false) {
       renderers[kind] = kind === 'flat' ? new m.Renderer2D(c)
         : kind === 'made' ? new m.RendererCrafted(c, { mode: next.id })
           : kind === 'yarn' ? new m.RendererYarn(c)
+            : kind === 'riso' ? new m.RendererRiso(c)
             : new m.Renderer3D(c);
     } catch (err) {
       // a canvas that failed to give a context is no use to a second try

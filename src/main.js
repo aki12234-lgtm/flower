@@ -43,7 +43,7 @@ const PAGE_LOOK = document.documentElement.dataset.renderer === 'flat' ? 'flat' 
 const QUERY = new URLSearchParams(location.search);
 function firstLook() {
   // ?look=riso opens on one; ?style=real is the older way of asking for 3D
-  const asked = QUERY.get('look') || (QUERY.get('style') === 'real' ? 'real' : null);
+  const asked = QUERY.get('look') || (QUERY.get('style') === 'real' ? '3d' : null);
   if (asked && LOOK_BY_ID[asked]) return asked;
   try {
     const kept = JSON.parse(localStorage.getItem(LOOK_KEY) || 'null');
@@ -53,14 +53,19 @@ function firstLook() {
   return PAGE_LOOK;
 }
 let look = LOOK_BY_ID[firstLook()];
-const load = { flat: () => import('./flat/renderer2d.js'), gl: () => import('./gl/renderer3d.js') };
+const load = {
+  flat: () => import('./flat/renderer2d.js'),
+  gl: () => import('./gl/renderer3d.js'),
+  v1: () => import('../versions/v1/src/gl/renderer3d.js'),
+  made: () => import('./flat/crafted.js'),
+};
 const modules = {};
 const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());
 // (if it cannot be had, boot() says so on the page; the console need not first)
 fetchRenderer(look.renderer).catch(() => {});
 const stages = {};       // one canvas per renderer
 const renderers = {};
-const FLAT_NOW = () => look.renderer === 'flat';
+const FLAT_NOW = () => look.renderer === 'flat' || look.renderer === 'made';
 
 /**
  * Say so when the renderer cannot start.
@@ -600,7 +605,7 @@ function draw(now) {
     clamp((top - 2600) / 5200, 0, 1),
     era(now),
   );
-  if (look.idiom === 43) renderer.setText?.(words());
+  if (look.id === 'ascii') renderer.setText?.(words());
   renderer.render(engine.plant, cam, now, engine.plant.sections,
     growing ? { step: growing.step, progress } : null);
 }
@@ -711,7 +716,9 @@ async function useLook(id, first = false) {
   if (!renderers[kind]) {
     const c = stageFor(kind);
     try {
-      renderers[kind] = kind === 'flat' ? new m.Renderer2D(c) : new m.Renderer3D(c, { style: next.style });
+      renderers[kind] = kind === 'flat' ? new m.Renderer2D(c)
+        : kind === 'made' ? new m.RendererCrafted(c, { mode: next.id })
+          : new m.Renderer3D(c);
     } catch (err) {
       // a canvas that failed to give a context is no use to a second try
       if (c !== canvas) { c.remove(); delete stages[kind]; }
@@ -721,7 +728,7 @@ async function useLook(id, first = false) {
   for (const [k, c] of Object.entries(stages)) c.style.display = k === kind ? '' : 'none';
   renderer = renderers[kind];
   renderer.resize();
-  renderer.setLook?.(next.style, next.idiom);
+  renderer.setLook?.(next);
   renderer.invalidate();
   look = next;
   picker?.show(look);

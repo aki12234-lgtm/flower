@@ -36,20 +36,26 @@ other way.
 ### Looks: how the picture is drawn is the player's choice
 
 The chip in the top left corner changes the look of the whole scene, at any
-moment, without touching the plant, the place or the camera (`src/looks.js`):
-Print, Flat, 3D, Riso, ASCII, Blueprint, Halftone, Line, Block print, Thermal.
-Print and Flat are the two renderers the pages open on; the rest are the lit 3D
-picture, and for the drawn ones a filter over all of it in the camera pass
-(`look()` in `renderer3d.js`). Each renderer is fetched the first time a look
-needs it and keeps a canvas of its own. `?look=riso` opens on one.
+moment, without touching the plant, the place or the camera (`src/looks.js`).
+Nothing else ever changes it.
 
-ASCII is set in the player's own words: every question asked and the answer
-given, in order, laid out as a page. The picture decides only how brightly each
-letter is lit and in what colour.
+| | |
+|---|---|
+| **3D** | the lit renderer as it stood in v1 (`versions/v1`, frozen), drawing the current plant |
+| **Illustrated** | v3's print |
+| **Flat** | v4's 2D drawing |
+| **ASCII** | the world in small type, the plant in large: both are the questions asked and the answers given |
+| **Crochet** | the world knitted, a stitch a colour; the plant a heavier crocheted chain lying on it |
 
-Nothing changes the look but the player. The drawn states are also out of the
-pool a plant's material is chosen from, so a plant no longer turns into a
-picture of itself on a roll; what it is made of still follows the answers.
+ASCII and Crochet are `src/flat/crafted.js`. A look there is a material, not a
+filter: plant and world are the same stuff and still told apart (by the size of
+the letter, by the weight of the stitch), and growth happens the way the stuff
+is made, a letter or a stitch at a time. The world is the flat renderer's own,
+drawn small and set on a grid fixed to the ground.
+
+The drawn states are out of the pool a plant's material is chosen from, so a
+plant no longer turns into a picture of itself on a roll; what it is made of
+still follows the answers.
 
 ### v4: the illustrated look, drawn flat
 

@@ -1303,10 +1303,6 @@ uniform sampler2D uSceneSmooth;  // the same image, read filtered
 uniform vec2 uPixel; uniform float uFocus; uniform float uAperture;
 uniform float uNear; uniform float uFar; uniform float uTime; uniform float uExposure;
 uniform float uGlyphCount;
-uniform sampler2D uText;       // the player's own words, one character a texel
-uniform sampler2D uTextGlyphs; // every printable character, in code order
-uniform vec2 uTextSize;        // columns and rows of uText; 0 when there are no words
-uniform float uLook;           // the look the whole picture is printed in, by idiom id; 0 for none
 uniform float uScale;    // device pixels per CSS pixel, so cells stay legible
 uniform vec2 uGrid;      // camera pan in device pixels, so screens stay put on the plant
 uniform float uToneOnly; // 1 shows a flat idiom's tone with no treatment, for tests
@@ -1924,171 +1920,9 @@ vec3 idiom(int id, vec3 col, vec2 uv, float dist) {
   return col;
 }
 
-// ---------------------------------------------------------------- looks --
-//
-// A look is the whole finished picture printed another way, and the player's
-// to choose. The idioms above are materials: marks laid on one section of a
-// plant, over a backdrop that stays a photograph. Handing every surface in a
-// scene one of those ids did not make a drawing of the scene — each was
-// written to sit on something else, and with nothing else left the ground went
-// black and the grass stayed lit. So a look does not go through them. It reads
-// the lit picture as the camera would have shown it, and its depth, and makes
-// one print of all of it.
-
-/** The picture as the lit camera pass would show it, without lens or grain. */
-vec3 seen(vec2 uv) {
-  vec3 c = textureLod(uSceneSmooth, uv, 0.0).rgb * uExposure;
-  c = uTonemap > 0.5 ? neutral(c * 1.7) : aces(c);
-  return placeGrade(pow(max(c, 0.0), vec3(1.0 / 2.2)));
-}
-
-float lumOf(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
-
-/**
- * Where a pen would put a line: where one thing ends in front of another, and
- * where the colour breaks. Depth is compared as a ratio, because a step that is
- * an edge beside the plant is nothing at all between two hills on the horizon.
- */
-float outline(vec2 uv, float dist, float w) {
-  vec2 px = uPixel * w * uScale;
-  vec3 c0 = seen(uv);
-  float d = 0.0;
-  float k = 0.0;
-  for (int i = 0; i < 4; i++) {
-    vec2 o = (i == 0 ? vec2(1.0, 0.0) : i == 1 ? vec2(-1.0, 0.0) : i == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0)) * px;
-    float dd = linearDepth(texture(uDepth, uv + o).r);
-    d = max(d, abs(dd - dist) / min(dd, dist));
-    k = max(k, length(seen(uv + o) - c0));
-  }
-  return max(smoothstep(0.05, 0.14, d), smoothstep(0.13, 0.30, k));
-}
-
-/** A round dot screen at an angle: 1 inside a dot sized for the tone. */
-float screenDot(vec2 p, float angle, float size, float tone) {
-  mat2 r = mat2(cos(angle), -sin(angle), sin(angle), cos(angle));
-  vec2 q = r * p / (size * uScale);
-  float rad = sqrt(clamp(tone, 0.0, 1.0)) * 0.72;
-  return smoothstep(rad + 0.07, rad - 0.07, length(fract(q) - 0.5));
-}
-
-vec3 look(int id, float dist) {
-  vec2 uv = vUv;
-  vec3 c = seen(uv);
-  float lum = lumOf(c);
-  vec3 o = c;
-
-  if (id == 43) {                                   // ASCII, in the player's own words
-    // Written rather than sampled: the letters are the questions asked and the
-    // answers given, in order, set as a page — columns from the left of the
-    // screen so a line can be read, rows fixed to the plant so the page scrolls
-    // with it. Which letter a cell holds is the text's business; the picture
-    // only decides how brightly it is lit, and in what colour.
-    vec2 cell = vec2(9.0, 15.0) * uScale;
-    vec2 tp = vec2(gl_FragCoord.x, gpos().y);
-    vec2 tg = floor(tp / cell);
-    vec2 tf = (tp - tg * cell) / cell;
-    vec3 tc = vec3(0.0);
-    float alive = 0.0;
-    for (int i = 0; i < 5; i++) {
-      vec2 at = i == 0 ? vec2(0.5, 0.5)
-              : i == 1 ? vec2(0.22, 0.25)
-              : i == 2 ? vec2(0.78, 0.25)
-              : i == 3 ? vec2(0.22, 0.75)
-              :          vec2(0.78, 0.75);
-      vec2 sp = (tg + at) * cell - vec2(0.0, uGrid.y);
-      tc += seen(sp * uPixel);
-      // a stem is thinner than a letter: any of the five finding it will do
-      int mid = int(texelFetch(uScene, ivec2(sp), 0).a * 255.0 + 0.5);
-      if ((mid >= 1 && mid <= 22) || mid >= 40) alive = 1.0;
-    }
-    tc *= 0.2;
-    float tl = lumOf(tc);
-    float tm = 0.0;
-    if (uTextSize.x > 0.5) {
-      ivec2 at = ivec2(int(mod(tg.x, uTextSize.x)), int(mod(-tg.y - 1.0, uTextSize.y)));
-      float code = floor(texelFetch(uText, at, 0).r * 255.0 + 0.5);
-      tm = texture(uTextGlyphs, vec2((code + clamp(tf.x, 0.02, 0.98)) / 95.0, 1.0 - tf.y)).r;
-    }
-    // the hue of what is there, at full strength; its tone is how bright
-    vec3 hue = tc / max(max(tc.r, max(tc.g, tc.b)), 0.08);
-    hue = pow(hue, vec3(1.7));
-    // the plant is the subject: its letters are the brightest on the page
-    float bright = 0.30 + 0.70 * smoothstep(0.12, 0.70, tl);
-    vec3 lit = mix(hue * bright, vec3(1.0, 0.98, 0.92), alive);
-    // and the picture itself, dimly, behind the type, so a shape is still a shape
-    vec3 page = vec3(0.020, 0.022, 0.028) + hue * bright * 0.20;
-    o = mix(mix(page, vec3(0.30, 0.28, 0.24), alive * 0.6), lit, tm);
-  } else if (id == 53) {                            // risograph: two inks on paper, off register
-    vec3 paper = vec3(0.955, 0.925, 0.865);
-    vec3 pink = vec3(1.00, 0.28, 0.46);
-    vec3 blue = vec3(0.10, 0.30, 0.74);
-    // each drum is cut from its own reading of the picture, and the second
-    // goes down a little out of place
-    vec3 c2 = seen(uv + vec2(2.6, -1.8) * uPixel * uScale);
-    float plateP = pow(clamp(1.0 - c.g * 0.80 - c.b * 0.25, 0.0, 1.0), 1.7) * 0.95;
-    float plateB = pow(clamp(1.0 - c2.r * 0.95 - c2.g * 0.12, 0.0, 1.0), 1.9);
-    float dP = screenDot(gpos(), 0.36, 5.0, plateP);
-    float dB = screenDot(gpos() + vec2(2.6, -1.8) * uScale, 1.18, 5.0, plateB);
-    o = paper * mix(vec3(1.0), pink, dP * 0.92) * mix(vec3(1.0), blue, dB * 0.90);
-    o += (hash21(floor(gpos() / (1.5 * uScale))) - 0.5) * 0.035;
-  } else if (id == 45) {                            // halftone: four plates
-    vec3 paper = vec3(0.965, 0.950, 0.915);
-    float kk = clamp(1.0 - max(c.r, max(c.g, c.b)), 0.0, 1.0);
-    vec3 cmy = (1.0 - c - kk) / max(1.0 - kk, 0.001);
-    float sz = 5.6;
-    o = paper;
-    o *= mix(vec3(1.0), vec3(0.05, 0.62, 0.86), screenDot(gpos(), 0.262, sz, cmy.r));
-    o *= mix(vec3(1.0), vec3(0.88, 0.10, 0.50), screenDot(gpos(), 1.309, sz, cmy.g));
-    o *= mix(vec3(1.0), vec3(0.99, 0.88, 0.10), screenDot(gpos(), 0.0, sz, cmy.b));
-    o *= mix(vec3(1.0), vec3(0.10, 0.09, 0.09), screenDot(gpos(), 0.785, sz, kk * 0.9));
-  } else if (id == 41) {                            // line: a pen, and a little wash
-    vec3 paper = vec3(0.960, 0.945, 0.905);
-    float e = outline(uv, dist, 1.1);
-    vec3 wash = mix(paper, c, 0.16);
-    // hatching in the darks, two directions as it gets darker
-    float h1 = step(0.5, fract((gpos().x + gpos().y) / (6.0 * uScale)));
-    float h2 = step(0.5, fract((gpos().x - gpos().y) / (6.0 * uScale)));
-    float hatch = max(h1 * (1.0 - smoothstep(0.30, 0.42, lum)) * 0.5, h2 * (1.0 - smoothstep(0.16, 0.26, lum)) * 0.6);
-    o = mix(wash, vec3(0.11, 0.10, 0.12), max(e, hatch * 0.75));
-  } else if (id == 52) {                            // blueprint
-    float e = outline(uv, dist, 1.0);
-    vec2 g = gpos() / (18.0 * uScale);
-    vec2 gf = abs(fract(g) - 0.5);
-    float fine = step(0.47, max(gf.x, gf.y)) * 0.10;
-    vec2 gc = abs(fract(g / 5.0) - 0.5);
-    float coarse = step(0.494, max(gc.x, gc.y)) * 0.16;
-    vec3 ground = vec3(0.05, 0.17, 0.40) * (0.90 + lum * 0.28);
-    vec3 line = vec3(0.80, 0.92, 1.0);
-    o = mix(ground + line * max(fine, coarse), line, e * 0.95);
-  } else if (id == 57) {                            // block print: flat areas in a cut keyline
-    // one flat colour to an area, in four steps of tone and at full strength
-    float steps = floor(lum * 4.0 + 0.5) / 4.0;
-    vec3 hue = c / max(lum, 0.05);
-    hue = mix(vec3(lumOf(hue)), hue, 1.45);
-    vec3 flatc = clamp(hue * max(steps, 0.16), 0.0, 1.0);
-    flatc = mix(flatc, vec3(0.95, 0.92, 0.85), smoothstep(0.86, 0.96, lum));
-    // the ink never lies quite evenly on a cut block
-    float tooth = vnoise(gpos() / (2.2 * uScale)) * 0.5 + vnoise(gpos() / (9.0 * uScale)) * 0.5;
-    flatc *= 0.90 + tooth * 0.14;
-    float e = outline(uv, dist, 1.9);
-    o = mix(flatc, vec3(0.085, 0.07, 0.075), step(0.5, e));
-  } else if (id == 48) {                            // thermal: the living thing is the warm one
-    int mid = int(texelFetch(uScene, ivec2(gl_FragCoord.xy), 0).a * 255.0 + 0.5);
-    float alive = (mid >= 1 && mid <= 22) || mid >= 40 ? 1.0 : 0.0;
-    float sky = step(dist, uFar * 0.5);
-    float t = clamp(lum * 0.62 * sky + 0.04 + alive * (0.42 + lum * 0.30), 0.0, 1.0);
-    o = heatRamp(t);
-  }
-
-  float fr = length((vUv - 0.5) * vec2(1.0, 1.15));
-  o *= 1.0 - smoothstep(0.42, 0.95, fr) * (id == 43 ? 0.5 : 0.22);
-  return o;
-}
-
 void main() {
   float depth = texture(uDepth, vUv).r;
   float dist = linearDepth(depth);
-  if (uLook > 0.5 && uToon < 0.5) { outColour = vec4(look(int(uLook + 0.5), dist), 1.0); return; }
 
   // A drawing is not photographed. Depth of field, lens colour fringing and
   // film grain are all artefacts of a camera looking at a real object, and
@@ -2456,59 +2290,6 @@ export function makeGlyphAtlas(gl) {
   return { tex, count: RAMP.length, canvas: c, cellW: cw };
 }
 
-/** Every printable character, in code order, for text set in the player's words. */
-export function makeTextAtlas(gl) {
-  const cw = 24;
-  const ch = 34;
-  const c = document.createElement('canvas');
-  c.width = cw * 95;
-  c.height = ch;
-  const g = c.getContext('2d');
-  g.fillStyle = '#000';
-  g.fillRect(0, 0, c.width, c.height);
-  g.fillStyle = '#fff';
-  g.font = 'bold 27px ui-monospace, "SF Mono", Menlo, Consolas, monospace';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  for (let i = 0; i < 95; i++) g.fillText(String.fromCharCode(32 + i), i * cw + cw / 2, ch / 2 + 1);
-  const tex = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, tex);
-  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return tex;
-}
-
-/**
- * Text as a page of character codes: word-wrapped to `cols`, one line a row.
- * Returns the rows, each exactly `cols` long. Kept apart from the GL so it can
- * be checked without a context.
- */
-export function layoutText(text, cols) {
-  const plain = String(text || '')
-    .replace(/[\u2018\u2019]/g, "'").replace(/[\u201c\u201d]/g, '"')
-    .replace(/[\u2013\u2014]/g, '-').replace(/\u2026/g, '...')
-    .replace(/[^\x20-\x7e]/g, ' ').replace(/\s+/g, ' ').trim();
-  const rows = [];
-  let line = '';
-  for (const word of plain.split(' ')) {
-    if (!word) continue;
-    if (line && line.length + 1 + word.length > cols) { rows.push(line); line = ''; }
-    line = line ? line + ' ' + word : word.slice(0, cols);
-  }
-  if (line) rows.push(line);
-  // A short text is said again until it fills a screen's worth of rows, each
-  // time starting a little further along so the lines do not stack in columns.
-  const base = rows.slice();
-  for (let k = 1; base.length && rows.length < 48; k++) {
-    for (const r of base) rows.push((' '.repeat((k * 7) % 11) + r).slice(0, cols));
-  }
-  return rows.slice(0, 512).map((r) => r.padEnd(cols, ' '));
-}
-
 export class Renderer3D {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
@@ -2542,10 +2323,6 @@ export class Renderer3D {
     gl.samplerParameteri(this.shadowCompare, gl.TEXTURE_COMPARE_FUNC, gl.LEQUAL);
     this.quad = fullscreenTriangle(gl, this.postProg);
     this.glyphs = makeGlyphAtlas(gl);
-    this.textGlyphs = makeTextAtlas(gl);
-    this.textTex = gl.createTexture();
-    this.textSize = [0, 0];
-    this.lookIdiom = 0;
     this.surfaceTable = surfaceTable(gl);
     // 'toon' (v3, printed) unless a page asks for the lit look
     this.style = opts.style || 'toon';
@@ -2818,44 +2595,6 @@ export class Renderer3D {
    * Both belong to the plant rather than to a section: a life is one column of
    * world, and the ground under it does not change halfway up.
    */
-  /**
-   * The look of the whole picture, as the player chose it: printed or lit, and
-   * for a lit one, an idiom everything in it is drawn in (0 for none).
-   */
-  setLook(style, idiom = 0) {
-    const s = style === 'real' ? 'real' : 'toon';
-    if (s !== this.style) {
-      this.style = s;
-      this.invalidate();
-      this.farKey = null;
-    }
-    this.lookIdiom = s === 'real' ? idiom : 0;
-  }
-
-  /** The words the ASCII look is set in. Laid out again when they or the width change. */
-  setText(text) {
-    const cols = Math.max(20, Math.min(1024, Math.ceil(this.pw / (9 * this.dpr))));
-    const key = cols + '|' + text;
-    if (key === this.textKey) return;
-    this.textKey = key;
-    const rows = layoutText(text, cols);
-    if (!rows.length) { this.textSize = [0, 0]; return; }
-    const data = new Uint8Array(cols * rows.length);
-    rows.forEach((r, y) => { for (let x = 0; x < cols; x++) data[y * cols + x] = r.charCodeAt(x) - 32; });
-    const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.textTex);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, cols, rows.length, 0, gl.RED, gl.UNSIGNED_BYTE, data);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-    gl.bindTexture(gl.TEXTURE_2D, null);
-    this.textSize = [cols, rows.length];
-  }
-
   setWorld(kind, nightness, idiom = 0) {
     this.worldKind = kind;
     this.nightness = nightness;
@@ -3094,10 +2833,6 @@ export class Renderer3D {
       uDepth: this.hdr.depth,
       uGlyphs: this.glyphs.tex,
       uGlyphCount: this.glyphs.count,
-      uText: this.textTex,
-      uTextGlyphs: this.textGlyphs,
-      uTextSize: this.textSize,
-      uLook: this.lookIdiom || 0,
       uScale: this.dpr,
       uToneOnly: this.toneOnly ? 1 : 0,
       // world-to-device scale is zoom * dpr near the plant's own plane

@@ -8,9 +8,12 @@
 // that the light does not reach, and the shading is worked out from that
 // height, pixel by pixel, rather than painted on.
 //
-// The plant is a crocheted cord lying on the cloth: heavier than the knitting,
-// round, shading the fabric under it, with flowers worked in rounds. It grows a
-// stitch at a time, and the yarn it is being worked from hangs from each end.
+// The plant is in the cloth, not on it: it is worked over the same stitches in
+// a heavier yarn, the way a motif is darned into knitting, so it follows the
+// rows and columns of the fabric it belongs to. It stands a little prouder than
+// the ground and presses a shade into the stitches beside it, and that is all
+// that sets it apart. It grows the only way such a thing can: a stitch at a
+// time.
 //
 // The world itself is the flat renderer's (every place, bird and deer), drawn
 // small off-screen: all this keeps of it is one colour per stitch.
@@ -113,6 +116,7 @@ void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
 const CLOTH_FS = `${COMMON}
 uniform sampler2D uCells;
+uniform sampler2D uPlant;   // the plant, a stitch a texel; clear where it is not
 uniform vec2 uOrigin;   // where cell (0,0) starts, in device pixels from the top left
 uniform vec2 uCell;     // a stitch, in device pixels
 uniform vec2 uRes;
@@ -131,6 +135,14 @@ void main() {
   // wool is not as loud as ink, and no two stitches take the dye alike
   float l = dot(dye, vec3(0.2126, 0.7152, 0.0722));
   dye = mix(vec3(l), dye, 0.88) * 0.94 + 0.012;
+  // the plant's stitches: its own yarn, and more of it
+  vec4 pl = texelFetch(uPlant, ci, 0);
+  float bulk = step(0.5, pl.a);
+  if (bulk > 0.5) {
+    dye = toLinear(pl.rgb);
+    float pl2 = dot(dye, vec3(0.2126, 0.7152, 0.0722));
+    dye = mix(vec3(pl2), dye, 1.06);
+  }
   dye *= 0.93 + 0.14 * hash21(floor(p) + 3.0);
 
   float e = 0.07;
@@ -138,90 +150,26 @@ void main() {
   float gx = (yarnH(p + vec2(e, 0.0), 1.0) - h0) / e;
   float gy = (yarnH(p + vec2(0.0, e), 1.0) - h0) / e;
   // (stitch space has y up; the screen, and the light, have it down)
-  vec3 n = normalize(vec3(-gx * 0.85, gy * 0.85, 1.0));
+  // (the same stitch as the ground's: any wider and the legs close up into a flat block)
+  float proud = 1.0;
+  vec3 n = normalize(vec3(-gx * 0.85 * proud, gy * 0.85 * proud, 1.0));
   vec3 c = wool(dye, n, h0, p);
+  // Heavier yarn stands above the ground it is worked into, so the stitches
+  // beside it, away from the light, sit in its shade, and the ones towards the
+  // light are pressed down against it. No more than that: it is in the cloth.
+  if (bulk < 0.5) {
+    float a = texelFetch(uPlant, clamp(ci + ivec2(-1, -1), ivec2(0), size - 1), 0).a;
+    float b = texelFetch(uPlant, clamp(ci + ivec2(-1, 0), ivec2(0), size - 1), 0).a;
+    float d2 = texelFetch(uPlant, clamp(ci + ivec2(0, -1), ivec2(0), size - 1), 0).a;
+    float e2 = texelFetch(uPlant, clamp(ci + ivec2(1, 0), ivec2(0), size - 1), 0).a;
+    float f2 = texelFetch(uPlant, clamp(ci + ivec2(0, 1), ivec2(0), size - 1), 0).a;
+    c *= 1.0 - 0.30 * max(a, max(b, d2)) - 0.10 * max(e2, f2);
+  } else c *= 1.08;
   // cloth never lies quite flat
   c *= 0.90 + 0.20 * vnoise(p * 0.045 + 11.0);
   vec2 uv = px / uRes - 0.5;
   c *= 1.0 - smoothstep(0.35, 0.95, length(uv * vec2(1.0, 1.15))) * 0.30;
   outColour = vec4(pow(c, vec3(1.0 / 2.2)), 1.0);
-}`;
-
-const WORK_VS = `#version 300 es
-in vec2 aPos; in vec2 aUv; in vec2 aTan; in vec3 aCol; in float aKind; in float aSize;
-uniform vec2 uRes; uniform vec2 uShift;
-out vec2 vUv; out vec2 vTan; out vec3 vCol; out float vKind; out float vSize;
-void main() {
-  vUv = aUv; vTan = aTan; vCol = aCol; vKind = aKind; vSize = aSize;
-  vec2 p = (aPos + uShift) / uRes;
-  gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, 0.0, 1.0);
-}`;
-
-// kind 0: crocheted cord (uv: along in device pixels, across -1..1; size: its width)
-// kind 1: a round, worked from the middle out (uv: -1..1 both ways; size: stitches round)
-// kind 2: plain yarn, unworked (the tail hanging from the hook)
-const WORK_FS = `${COMMON}
-in vec2 vUv; in vec2 vTan; in vec3 vCol; in float vKind; in float vSize;
-uniform float uShadow;
-out vec4 outColour;
-void main() {
-  vec2 across = vec2(-vTan.y, vTan.x);
-  float edge, dome;
-  vec2 p;            // where on the yarn, in stitches
-  vec2 gdir;         // which way the dome falls away, in (across, along)
-  if (vKind > 0.5 && vKind < 1.5) {
-    float r = length(vUv);
-    float ang = atan(vUv.y, vUv.x);
-    edge = r;
-    dome = sqrt(max(0.0, 1.0 - r * r * 0.82));
-    p = vec2(ang / 6.2832 * vSize, r * 3.0);
-    gdir = vUv * 0.75;
-  } else {
-    float v = vUv.y;
-    edge = abs(v);
-    dome = sqrt(max(0.0, 1.0 - v * v));
-    // one stitch across the face of the cord: the chain you see from the front
-    p = vKind > 1.5 ? vec2(v * 0.5 + 0.5, vUv.x / (vSize * 1.6)) : vec2(v * 0.60 + 0.5, vUv.x / (vSize * 0.56));
-    gdir = vec2(v * 0.95, 0.0);
-  }
-  // the outline of a yarn is fibre, not a line
-  bool isRound = vKind > 0.5 && vKind < 1.5;
-  float fluff = vnoise(vUv * vec2(isRound ? 22.0 : 0.33, isRound ? 22.0 : 9.0) + vSize) - 0.5;
-  float alpha = 1.0 - smoothstep(0.84, 1.0, edge + fluff * (isRound ? 0.13 : 0.20));
-  if (uShadow > 0.5) {
-    outColour = vec4(0.06, 0.04, 0.07, 0.40 * (1.0 - smoothstep(0.35, 1.0, edge)));
-    return;
-  }
-  if (alpha < 0.01) discard;
-
-  float e = 0.07;
-  float h0, gx, gy;
-  if (vKind > 1.5) {
-    // plies only, wound round
-    h0 = 0.6 + 0.4 * sin((p.y * 3.0 + p.x * 1.6) * 6.2832);
-    gx = 0.0; gy = cos((p.y * 3.0 + p.x * 1.6) * 6.2832) * 1.2;
-  } else {
-    h0 = yarnH(p, 1.0);
-    gx = (yarnH(p + vec2(e, 0.0), 1.0) - h0) / e;
-    gy = (yarnH(p + vec2(0.0, e), 1.0) - h0) / e;
-  }
-  vec2 lean;
-  if (vKind > 0.5 && vKind < 1.5) {
-    float r = max(length(vUv), 1e-3);
-    vec2 er = vUv / r;
-    vec2 et = vec2(-er.y, er.x);
-    lean = gdir - (et * gx + er * gy) * 0.62;
-  } else {
-    lean = gdir - vec2(gx, gy) * 0.62;
-  }
-  // from the work's own directions to the screen's
-  vec2 ns = across * lean.x + vTan * lean.y;
-  vec3 n = normalize(vec3(ns, dome * 0.85 + 0.30));
-  vec3 dye = toLinear(vCol) * (0.94 + 0.12 * hash21(floor(p) + 5.0));
-  vec3 c = wool(dye, n, h0, p);
-  // round things are darker at the edge that turns away
-  c *= 0.62 + 0.38 * dome;
-  outColour = vec4(pow(c, vec3(1.0 / 2.2)), alpha);
 }`;
 
 function program(gl, vs, fs) {
@@ -240,8 +188,6 @@ function program(gl, vs, fs) {
   return p;
 }
 
-const STRIDE = 11;   // pos 2, uv 2, tangent 2, colour 3, kind 1, size 1
-
 export class RendererYarn {
   constructor(canvas) {
     this.canvas = canvas;
@@ -254,15 +200,19 @@ export class RendererYarn {
     const off = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : document.createElement('canvas');
     this.flat = new RendererCrafted(off, { width: 800, height: 600, dpr: 1 });
     this.cloth = program(gl, QUAD_VS, CLOTH_FS);
-    this.work = program(gl, WORK_VS, WORK_FS);
     this.quad = gl.createBuffer();
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
-    this.mesh = gl.createBuffer();
-    this.tex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
-      [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+    const texture = () => {
+      const t = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, t);
+      for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.NEAREST], [gl.TEXTURE_MAG_FILTER, gl.NEAREST],
+        [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
+      return t;
+    };
+    this.tex = texture();
+    this.plantTex = texture();
+    this.plantCells = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : document.createElement('canvas');
     this.resize();
   }
 
@@ -304,14 +254,22 @@ export class RendererYarn {
     const grid = { cw, ch, gx, gy, cols: Math.ceil(this.pw / cw) + 2, rows: Math.ceil(this.ph / ch) + 2, x0: gx - cw, y0: gy - ch };
     flat.drawCells(v, time, plant, grid);
 
+    this.drawPlantCells(plant, reveal, v, grid);
+
     gl.viewport(0, 0, this.pw, this.ph);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.plantTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.plantCells);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, flat.cells);
     gl.useProgram(this.cloth);
     gl.uniform1i(gl.getUniformLocation(this.cloth, 'uCells'), 0);
+    gl.uniform1i(gl.getUniformLocation(this.cloth, 'uPlant'), 1);
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uOrigin'), grid.x0, grid.y0);
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uCell'), cw, ch);
     gl.uniform2f(gl.getUniformLocation(this.cloth, 'uRes'), this.pw, this.ph);
@@ -321,183 +279,91 @@ export class RendererYarn {
     gl.vertexAttribPointer(qa, 2, gl.FLOAT, false, 0, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disableVertexAttribArray(qa);
-
-    const data = this.buildWork(plant, reveal, v, time);
-    if (!data.length) return;
-    gl.useProgram(this.work);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.mesh);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(data), gl.DYNAMIC_DRAW);
-    let off = 0;
-    const locs = [];
-    for (const [name, n] of [['aPos', 2], ['aUv', 2], ['aTan', 2], ['aCol', 3], ['aKind', 1], ['aSize', 1]]) {
-      const loc = gl.getAttribLocation(this.work, name);
-      if (loc >= 0) {
-        gl.enableVertexAttribArray(loc);
-        gl.vertexAttribPointer(loc, n, gl.FLOAT, false, STRIDE * 4, off * 4);
-        locs.push(loc);
-      }
-      off += n;
-    }
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    gl.uniform2f(gl.getUniformLocation(this.work, 'uRes'), this.pw, this.ph);
-    const count = data.length / STRIDE;
-    // the shade it throws on the cloth, then the work itself
-    gl.uniform1f(gl.getUniformLocation(this.work, 'uShadow'), 1);
-    gl.uniform2f(gl.getUniformLocation(this.work, 'uShift'), 5 * d, 8 * d);
-    gl.drawArrays(gl.TRIANGLES, 0, count);
-    gl.uniform1f(gl.getUniformLocation(this.work, 'uShadow'), 0);
-    gl.uniform2f(gl.getUniformLocation(this.work, 'uShift'), 0, 0);
-    gl.drawArrays(gl.TRIANGLES, 0, count);
-    gl.disable(gl.BLEND);
-    for (const loc of locs) gl.disableVertexAttribArray(loc);
   }
 
-  /** Every triangle of the plant, in device pixels, in the order to lay them down. */
-  buildWork(plant, reveal, v, time) {
+  /**
+   * The plant as stitches: drawn at one texel a stitch, so whatever it covers
+   * is whole stitches of the cloth and nothing between. A stem is a few
+   * stitches wide, a flower a handful of rounds of them.
+   */
+  drawPlantCells(plant, reveal, v, g) {
+    // Drawn three times the size and then one sample taken per stitch: a
+    // stitch is one yarn or another, never a blend of the two beside it.
+    const S = 3;
+    const out = this.plantCells;
+    if (out.width !== g.cols || out.height !== g.rows) { out.width = g.cols; out.height = g.rows; }
+    if (!this.plantHi) this.plantHi = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(8, 8) : document.createElement('canvas');
+    const c = this.plantHi;
+    if (c.width !== g.cols * S || c.height !== g.rows * S) { c.width = g.cols * S; c.height = g.rows * S; }
+    const ctx = c.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.setTransform(S, 0, 0, S, 0, 0);
     const d = this.dpr;
-    const out = [];
-    const P = (p) => ({
-      x: (v.W / 2 + (p.x - v.ex) * v.zoom) * d,
-      y: (v.H / 2 - (p.y - v.lookY) * v.zoom) * d,
-      w: (p.w || 1) * v.zoom * d,
-    });
-    const vert = (x, y, u, w, tx, ty, c, kind, size) => out.push(x, y, u, w, tx, ty, c[0], c[1], c[2], kind, size);
-    const WIDE = 1.12;       // room past the edge for the fibre to stand out into
-
-    /** A cord along screen points, `T` wide. Returns where it ended, and heading where. */
-    const cord = (raw, T, col, kind, upTo = Infinity) => {
-      // a cord cannot turn a square corner: it goes round it
-      let pts = raw;
-      for (let pass = 0; pass < 2 && pts.length > 2; pass++) {
-        const next = [pts[0]];
-        for (let i = 0; i < pts.length - 1; i++) {
-          const a = pts[i];
-          const b = pts[i + 1];
-          next.push({ x: a.x * 0.75 + b.x * 0.25, y: a.y * 0.75 + b.y * 0.25 }, { x: a.x * 0.25 + b.x * 0.75, y: a.y * 0.25 + b.y * 0.75 });
-        }
-        next.push(pts[pts.length - 1]);
-        pts = next;
-      }
-      let arc = 0;
-      let prev = null;
-      let end = null;
-      for (let i = 0; i < pts.length; i++) {
-        const a = pts[Math.max(0, i - 1)];
-        const b = pts[Math.min(pts.length - 1, i + 1)];
-        let tx = b.x - a.x;
-        let ty = b.y - a.y;
-        const tl = Math.hypot(tx, ty) || 1;
-        tx /= tl; ty /= tl;
-        if (i) arc += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-        let here = { x: pts[i].x, y: pts[i].y, arc, tx, ty };
-        if (arc > upTo && prev) {
-          // stop exactly on the last whole stitch
-          const t = (upTo - prev.arc) / Math.max(1e-6, arc - prev.arc);
-          here = { x: prev.x + (pts[i].x - prev.x) * t, y: prev.y + (pts[i].y - prev.y) * t, arc: upTo, tx, ty };
-        }
-        if (prev) {
-          const quad = [[prev, -1], [prev, 1], [here, 1], [prev, -1], [here, 1], [here, -1]];
-          for (const [q, side] of quad) {
-            vert(q.x - q.ty * side * T * 0.5 * WIDE, q.y + q.tx * side * T * 0.5 * WIDE, q.arc, side * WIDE, q.tx, q.ty, col, kind, T);
-          }
-        }
-        prev = here;
-        end = here;
-        if (arc >= upTo) break;
-      }
-      return end;
-    };
-    /** A round: an ellipse at (cx, cy), its long axis along (ax, ay). */
-    const round = (cx, cy, rx, ry, ax, ay, col, around) => {
-      const corner = [[-1, -1], [1, -1], [1, 1], [-1, -1], [1, 1], [-1, 1]];
-      for (const [u, w] of corner) {
-        vert(cx + ax * u * rx * WIDE - ay * w * ry * WIDE, cy + ay * u * rx * WIDE + ax * w * ry * WIDE,
-          u * WIDE, w * WIDE, ax, ay, col, 1, around);
-      }
-    };
-
+    // device pixels to stitches
+    const X = (x) => ((v.W / 2 + (x - v.ex) * v.zoom) * d - g.x0) / g.cw;
+    const Y = (y) => ((v.H / 2 - (y - v.lookY) * v.zoom) * d - g.y0) / g.ch;
+    const css = (rgb) => `rgb(${rgb.map((q) => Math.round(q * 255)).join(',')})`;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     const flowerHue = flowerHueFor(plant);
-    const ends = [];
+    const blob = (x, y, rx, ry, rot, colour) => {
+      ctx.fillStyle = colour;
+      ctx.beginPath();
+      ctx.ellipse(x, y, Math.max(0.8, rx), Math.max(0.8, ry), rot, 0, Math.PI * 2);
+      ctx.fill();
+    };
     for (const section of plant.sections) {
       const growing = reveal && section.step === reveal.step;
       const kMax = growing ? reveal.progress * section.steps : Infinity;
       if (growing && reveal.progress <= 0) continue;
       const hsl = stemColour(section, makeRng(1013 + section.step * 7919));
-      const col = yarnOf(hsl);
+      ctx.strokeStyle = css(yarnOf(hsl));
       for (const seg of section.segments) {
-        const all = seg.points.map(P);
-        if (all.length < 2) continue;
-        const T = clamp(all[0].w * 3.6, 12 * d, 28 * d) * (seg.depth > 0 ? 0.84 : 1);
-        let upTo = Infinity;
-        if (growing) {
-          // as far as it has got, in whole stitches: a chain gains a link, it does not slide
-          let len = 0;
-          for (let i = 1; i < seg.points.length && seg.points[i].k <= kMax; i++) {
-            len += Math.hypot(all[i].x - all[i - 1].x, all[i].y - all[i - 1].y);
-          }
-          const pitch = T * 0.56;
-          upTo = Math.floor(len / pitch) * pitch;
-          if (upTo <= 0) continue;
-        }
-        const end = cord(all, T, col, 0, upTo);
-        // the ends are finished off: a small tight round
-        round(all[0].x, all[0].y, T * 0.5, T * 0.5, 1, 0, col, 7);
-        if (end) {
-          round(end.x, end.y, T * 0.5, T * 0.5, end.tx, end.ty, col, 7);
-          if (growing) ends.push({ ...end, T, col });
-        }
+        const pts = growing ? seg.points.filter((p) => p.k <= kMax) : seg.points;
+        if (pts.length < 2) continue;
+        // never thinner than two stitches: one alone is a line of dots
+        ctx.lineWidth = clamp((pts[0].w * v.zoom * d * 3.2) / g.cw, 2.2, 4.5) * (seg.depth > 0 ? 0.8 : 1);
+        ctx.beginPath();
+        pts.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))));
+        ctx.stroke();
       }
       const pig = PIGMENT[section.materialId] || PIGMENT.botanical;
       for (const node of section.nodes) {
         const open = growing ? clamp((kMax - Math.max(0, node.k - 2.2)) / 2.2, 0, 1) : 1;
         if (open <= 0) continue;
-        const p = P(node);
         const ax = Math.cos(node.angle);
         const ay = -Math.sin(node.angle);
+        const px = X(node.x);
+        const py = Y(node.y);
         if (node.kind === 'leaf') {
-          const L = Math.max(24 * d, node.size * v.zoom * d * 2.2) * open;
-          round(p.x + ax * L * 0.5, p.y + ay * L * 0.5, L * 0.5, L * 0.24, ax, ay, yarnOf({ h: 112, s: 48, l: 34 }), 14);
+          const L = Math.max(3, (node.size * v.zoom * d * 2.2) / g.cw) * open;
+          blob(px + ax * L * 0.5, py + ay * L * 0.5 * (g.cw / g.ch), L * 0.5, L * 0.26, Math.atan2(ay, ax), css(yarnOf({ h: 112, s: 48, l: 34 })));
           continue;
         }
-        const pet = yarnOf(bloomColour(hsl, node, flowerHue, pig));
-        const R = Math.max(19 * d, node.size * v.zoom * d * 1.3) * open;
-        const cx = p.x + ax * R * 0.95;
-        const cy = p.y + ay * R * 0.95;
+        const R = Math.max(3.4, (node.size * v.zoom * d * 1.3) / g.cw) * open;
+        const cx = px + ax * R * 0.95;
+        const cy = py + ay * R * 0.95 * (g.cw / g.ch);
         const petals = 5 + (node.seed % 2);
         const spin = (node.seed % 628) / 100;
-        // petals a round each, opening one after another
+        // two shades of the one yarn, petal by petal, so a flower a few stitches
+        // across is still petals and not a patch
+        const bc = bloomColour(hsl, node, flowerHue, pig);
+        const by = yarnOf(bc);
+        const pets = [css(by.map((q) => Math.min(1, q * 1.16 + 0.03))), css(by.map((q) => q * 0.78))];
+        // a petal at a time, as it opens
         const shown = Math.ceil(petals * open);
         for (let i = 0; i < shown; i++) {
           const a = spin + (i / petals) * Math.PI * 2;
-          round(cx + Math.cos(a) * R * 0.56, cy + Math.sin(a) * R * 0.56, R * 0.50, R * 0.40, Math.cos(a), Math.sin(a), pet, 15);
+          blob(cx + Math.cos(a) * R * 0.58, cy + Math.sin(a) * R * 0.58 * (g.cw / g.ch), R * 0.46, R * 0.46 * (g.cw / g.ch), 0, pets[i % 2]);
         }
-        round(cx, cy, R * 0.30, R * 0.30, 1, 0, yarnOf({ h: 44, s: 76, l: 50 }), 9);
+        blob(cx, cy, R * 0.30, R * 0.30 * (g.cw / g.ch), 0, css(yarnOf({ h: 44, s: 76, l: 52 })));
       }
     }
-
-    // the yarn the work is still attached to, hanging from every end being worked
-    const live = ends.length ? ends : (plant.tips || []).filter((t) => t.alive !== false).map((t) => {
-      const last = [...plant.sections].reverse().find((s) => s.segments.some((g) => g.tipId === t.id)) || plant.sections[0];
-      const p = P({ x: t.x, y: t.y, w: t.width || 3 });
-      return { x: p.x, y: p.y, T: clamp(p.w * 3.6, 12 * d, 28 * d), col: yarnOf(stemColour(last, makeRng(1013 + last.step * 7919))) };
-    });
-    for (const e of live) {
-      const sway = Math.sin(time * 0.0016 + e.x * 0.01) * 6 * d;
-      const pts = [];
-      for (let i = 0; i <= 14; i++) {
-        const t = i / 14;
-        const u = 1 - t;
-        // a slack loop: out from the stitch, and down under its own weight
-        const bx = [e.x, e.x + 20 * d + sway, e.x + 26 * d - sway, e.x + 10 * d + sway * 1.6];
-        const by = [e.y, e.y - 12 * d, e.y + 26 * d, e.y + 54 * d];
-        pts.push({
-          x: u * u * u * bx[0] + 3 * u * u * t * bx[1] + 3 * u * t * t * bx[2] + t * t * t * bx[3],
-          y: u * u * u * by[0] + 3 * u * u * t * by[1] + 3 * u * t * t * by[2] + t * t * t * by[3],
-        });
-      }
-      cord(pts, e.T * 0.30, e.col, 2);
-    }
-    return out;
+    const oc = out.getContext('2d');
+    oc.setTransform(1, 0, 0, 1, 0, 0);
+    oc.clearRect(0, 0, out.width, out.height);
+    oc.imageSmoothingEnabled = false;
+    oc.drawImage(c, 0, 0, out.width, out.height);
   }
 }

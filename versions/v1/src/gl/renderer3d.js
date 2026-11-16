@@ -1398,9 +1398,12 @@ export class Renderer3D {
     this.gl = createGL(canvas, opts);
     const gl = this.gl;
 
-    this.sceneProg = program(gl, SCENE_VS, SCENE_FS);
-    this.depthProg = program(gl, DEPTH_VS, DEPTH_FS);
-    this.postProg = program(gl, POST_VS, POST_FS);
+    // (a look built on this renderer may hand in its own versions of the shaders)
+    const src = { SCENE_VS, SCENE_FS, DEPTH_VS, POST_FS };
+    if (opts.shaders) Object.assign(src, opts.shaders(src));
+    this.sceneProg = program(gl, src.SCENE_VS, src.SCENE_FS);
+    this.depthProg = program(gl, src.DEPTH_VS, DEPTH_FS);
+    this.postProg = program(gl, POST_VS, src.POST_FS);
 
     this.shadow = shadowTarget(gl, SHADOW_SIZE);
     this.quad = fullscreenTriangle(gl, this.postProg);

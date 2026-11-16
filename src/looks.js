@@ -18,6 +18,7 @@ export const LOOKS = [
   { id: 'ascii', name: 'ASCII', renderer: 'made' },
   { id: 'crochet', name: 'Crochet', renderer: 'yarn' },
   { id: 'riso', name: 'Riso', renderer: 'riso' },
+  { id: 'clay', name: 'Clay', renderer: 'clay' },
 ];
 
 export const LOOK_BY_ID = Object.fromEntries(LOOKS.map((l) => [l.id, l]));

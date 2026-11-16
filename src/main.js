@@ -58,6 +58,7 @@ const load = {
   gl: () => import('./gl/renderer3d.js'),
   v1: () => import('../versions/v1/src/gl/renderer3d.js'),
   made: () => import('./flat/crafted.js'),
+  yarn: () => import('./yarn/renderer3d.js'),
 };
 const modules = {};
 const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());

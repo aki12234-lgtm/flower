@@ -45,7 +45,7 @@ Nothing else ever changes it.
 | **Illustrated** | v3's print |
 | **Flat** | v4's 2D drawing |
 | **ASCII** | the world in small type, the plant in large: both are the questions asked and the answers given |
-| **Crochet** | the world knitted, a stitch a colour; the plant a heavier crocheted chain lying on it |
+| **Crochet** | v1's lit renderer with everything made of yarn (`src/yarn`): a crocheted cord for the plant, knitted ground and trees, wool clouds, as real relief under the light |
 
 ASCII and Crochet are `src/flat/crafted.js`. A look there is a material, not a
 filter: plant and world are the same stuff and still told apart (by the size of

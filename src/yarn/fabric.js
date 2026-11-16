@@ -26,7 +26,7 @@ const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 const mod = (a, n) => ((a % n) + n) % n;
 
 /** One knitted stitch, in CSS pixels. */
-const STITCH = [9, 6.5];
+const STITCH = [6.5, 4.75];
 
 /** HSL (degrees, percent, percent) to sRGB 0..1. */
 function rgbOf(h, s, l) {
@@ -345,10 +345,15 @@ export class RendererYarn {
         const pts = growing ? seg.points.filter((p) => p.k <= kMax) : seg.points;
         if (pts.length < 2) continue;
         // never thinner than two stitches: one alone is a line of dots
-        ctx.lineWidth = clamp((pts[0].w * v.zoom * d * 3.2) / g.cw, 2.2, 4.5) * (seg.depth > 0 ? 0.8 : 1);
-        ctx.beginPath();
-        pts.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))));
-        ctx.stroke();
+        const lw = clamp((pts[0].w * v.zoom * d * 3.2) / g.cw, 3.2, 6.5) * (seg.depth > 0 ? 0.8 : 1);
+        const run = () => { ctx.beginPath(); pts.forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y)))); ctx.stroke(); };
+        // a stem in three yarns: a dark edge, its own colour, and a pale stitch up the lit side
+        const sy = yarnOf(hsl);
+        ctx.lineWidth = lw; ctx.strokeStyle = css(sy.map((q) => q * 0.62)); run();
+        ctx.lineWidth = lw - 1.7; ctx.strokeStyle = css(sy); run();
+        ctx.save(); ctx.translate(-lw * 0.16, -lw * 0.10);
+        ctx.lineWidth = Math.max(1, lw * 0.22); ctx.strokeStyle = css(sy.map((q) => Math.min(1, q * 1.28 + 0.05))); run();
+        ctx.restore();
       }
       const pig = PIGMENT[section.materialId] || PIGMENT.botanical;
       for (const node of section.nodes) {
@@ -360,10 +365,17 @@ export class RendererYarn {
         const py = Y(node.y);
         if (node.kind === 'leaf') {
           const L = Math.max(3, (node.size * v.zoom * d * 2.2) / g.cw) * open;
-          blob(px + ax * L * 0.5, py + ay * L * 0.5 * (g.cw / g.ch), L * 0.5, L * 0.26, Math.atan2(ay, ax), css(yarnOf({ h: 112, s: 48, l: 34 })));
+          const lf = yarnOf({ h: 112, s: 48, l: 34 });
+          const lx = px + ax * L * 0.5, ly = py + ay * L * 0.5 * (g.cw / g.ch), rot = Math.atan2(ay, ax);
+          blob(lx, ly, L * 0.5, L * 0.27, rot, css(lf.map((q) => q * 0.60)));
+          blob(lx, ly, L * 0.5 - 0.9, L * 0.27 - 0.9, rot, css(lf));
+          // the lit half of the blade, and the rib down the middle
+          ctx.save(); ctx.beginPath(); ctx.ellipse(lx, ly, Math.max(0.8, L * 0.5 - 0.9), Math.max(0.8, L * 0.27 - 0.9), rot, Math.PI, Math.PI * 2); ctx.fillStyle = css(lf.map((q) => Math.min(1, q * 1.22 + 0.03))); ctx.fill(); ctx.restore();
+          ctx.strokeStyle = css(lf.map((q) => q * 0.60)); ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + ax * L * 0.86, py + ay * L * 0.86 * (g.cw / g.ch)); ctx.stroke();
           continue;
         }
-        const R = Math.max(3.4, (node.size * v.zoom * d * 1.3) / g.cw) * open;
+        const R = Math.max(5, (node.size * v.zoom * d * 1.3) / g.cw) * open;
         const cx = px + ax * R * 0.95;
         const cy = py + ay * R * 0.95 * (g.cw / g.ch);
         const petals = 5 + (node.seed % 2);
@@ -377,9 +389,20 @@ export class RendererYarn {
         const shown = Math.ceil(petals * open);
         for (let i = 0; i < shown; i++) {
           const a = spin + (i / petals) * Math.PI * 2;
-          blob(cx + Math.cos(a) * R * 0.58, cy + Math.sin(a) * R * 0.58 * (g.cw / g.ch), R * 0.46, R * 0.46 * (g.cw / g.ch), 0, pets[i % 2]);
+          const k = g.cw / g.ch;
+          const ex = cx + Math.cos(a) * R * 0.58, ey = cy + Math.sin(a) * R * 0.58 * k;
+          // each petal: a dark edge, its body, a pale tip, and a vein back to the heart
+          blob(ex, ey, R * 0.48, R * 0.48 * k, 0, css(by.map((q) => q * 0.52)));
+          blob(ex, ey, R * 0.48 - 0.9, (R * 0.48 - 0.9) * k, 0, pets[i % 2]);
+          blob(cx + Math.cos(a) * R * 0.78, cy + Math.sin(a) * R * 0.78 * k, R * 0.20, R * 0.20 * k, 0, css(by.map((q) => Math.min(1, q * 1.36 + 0.08))));
+          ctx.strokeStyle = css(by.map((q) => q * 0.52)); ctx.lineWidth = 0.9;
+          ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * R * 0.62, cy + Math.sin(a) * R * 0.62 * k); ctx.stroke();
         }
-        blob(cx, cy, R * 0.30, R * 0.30 * (g.cw / g.ch), 0, css(yarnOf({ h: 44, s: 76, l: 52 })));
+        const kk = g.cw / g.ch;
+        const heart = yarnOf({ h: 44, s: 76, l: 52 });
+        blob(cx, cy, R * 0.30, R * 0.30 * kk, 0, css(heart.map((q) => q * 0.62)));
+        blob(cx, cy, R * 0.30 - 0.8, (R * 0.30 - 0.8) * kk, 0, css(heart));
+        if (R > 6) blob(cx, cy, 0.8, 0.8, 0, css(heart.map((q) => q * 0.55)));
       }
     }
     const oc = out.getContext('2d');

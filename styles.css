@@ -32,7 +32,7 @@ html, body {
   overscroll-behavior: none;
 }
 
-#stage {
+#stage, .stage {
   position: fixed;
   inset: 0;
   width: 100%;
@@ -41,7 +41,7 @@ html, body {
   touch-action: none;
   cursor: grab;
 }
-#stage.dragging { cursor: grabbing; }
+#stage.dragging, .stage.dragging { cursor: grabbing; }
 
 #overlay {
   position: fixed;
@@ -74,6 +74,39 @@ html, body {
   font-weight: 500;
 }
 .chip.solid:hover { background: #fff; color: #16140f; }
+
+/* The look of the picture: what it is drawn in now, and the others. As quiet
+   as the other ways out until it is wanted. */
+.looks { position: fixed; top: calc(18px + env(safe-area-inset-top)); left: calc(18px + env(safe-area-inset-left)); }
+.looks > .chip { opacity: 0.42; }
+.looks:hover > .chip, .looks > .chip[aria-expanded="true"] { opacity: 1; }
+.looks-list {
+  margin-top: 6px;
+  display: grid;
+  gap: 2px;
+  padding: 5px;
+  min-width: 132px;
+  background: var(--glass);
+  border: 1px solid var(--edge);
+  border-radius: 14px;
+  backdrop-filter: blur(9px);
+  -webkit-backdrop-filter: blur(9px);
+}
+.looks-list[hidden] { display: none; }
+.looks-list button {
+  font: inherit;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-align: left;
+  color: var(--ink-dim);
+  background: none;
+  border: 0;
+  border-radius: 9px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.looks-list button:hover { color: var(--ink); background: rgba(242, 236, 224, 0.1); }
+.looks-list button[aria-selected="true"] { color: #16140f; background: rgba(242, 236, 224, 0.92); font-weight: 500; }
 
 #return-now { position: fixed; top: 18px; left: 50%; transform: translateX(-50%); }
 #finish { position: fixed; bottom: 20px; left: 20px; opacity: 0.42; }

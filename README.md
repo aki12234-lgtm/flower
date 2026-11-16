@@ -33,6 +33,24 @@ it and coming back costs nothing. v3 and v4 are one game with two renderers, so
 they keep one plant between them: going across shows the same plant drawn the
 other way.
 
+### Looks: how the picture is drawn is the player's choice
+
+The chip in the top left corner changes the look of the whole scene, at any
+moment, without touching the plant, the place or the camera (`src/looks.js`):
+Print, Flat, 3D, Riso, ASCII, Blueprint, Halftone, Line, Block print, Thermal.
+Print and Flat are the two renderers the pages open on; the rest are the lit 3D
+picture, and for the drawn ones a filter over all of it in the camera pass
+(`look()` in `renderer3d.js`). Each renderer is fetched the first time a look
+needs it and keeps a canvas of its own. `?look=riso` opens on one.
+
+ASCII is set in the player's own words: every question asked and the answer
+given, in order, laid out as a page. The picture decides only how brightly each
+letter is lit and in what colour.
+
+Nothing changes the look but the player. The drawn states are also out of the
+pool a plant's material is chosen from, so a plant no longer turns into a
+picture of itself on a roll; what it is made of still follows the answers.
+
 ### v4: the illustrated look, drawn flat
 
 v3 is printed from a 3D renderer: real geometry, every surface matched to the

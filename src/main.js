@@ -5,6 +5,7 @@ import { support } from './gl/glutil.js';
 import { UI } from './ui.js';
 import { clamp, lerp } from './rng.js';
 import { PLACES } from './gl/scene.js';
+import { LOOKS, LOOK_BY_ID, LOOK_KEY, wordsOf } from './looks.js';
 
 const GROW_MS = 1600;
 const GROWTH_LINE = 0.30;   // where down the screen the newest growth sits
@@ -33,10 +34,33 @@ const canvas = document.getElementById('stage');
 // two dimensions on a plain canvas, with no WebGL at all). The rest of the game
 // is the same game either way. Fetched now, so it arrives while the first
 // question goes up.
-const FLAT = document.documentElement.dataset.renderer === 'flat';
-const rendererModule = FLAT ? import('./flat/renderer2d.js') : import('./gl/renderer3d.js');
+//
+// That is only where a page starts, now. The look of the whole picture is the
+// player's to change at any moment (looks.js), and each renderer is fetched
+// the first time a look needs it and kept, on a canvas of its own: a canvas
+// that has given out a WebGL context can never give a 2D one, or the reverse.
+const PAGE_LOOK = document.documentElement.dataset.renderer === 'flat' ? 'flat' : 'print';
+const QUERY = new URLSearchParams(location.search);
+function firstLook() {
+  // ?look=riso opens on one; ?style=real is the older way of asking for 3D
+  const asked = QUERY.get('look') || (QUERY.get('style') === 'real' ? 'real' : null);
+  if (asked && LOOK_BY_ID[asked]) return asked;
+  try {
+    const kept = JSON.parse(localStorage.getItem(LOOK_KEY) || 'null');
+    // kept per page, so v3 and v4 still open as themselves until told otherwise
+    if (kept && LOOK_BY_ID[kept[PAGE_LOOK]]) return kept[PAGE_LOOK];
+  } catch { /* blocked or unreadable; the page's own look will do */ }
+  return PAGE_LOOK;
+}
+let look = LOOK_BY_ID[firstLook()];
+const load = { flat: () => import('./flat/renderer2d.js'), gl: () => import('./gl/renderer3d.js') };
+const modules = {};
+const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());
 // (if it cannot be had, boot() says so on the page; the console need not first)
-rendererModule.catch(() => {});
+fetchRenderer(look.renderer).catch(() => {});
+const stages = {};       // one canvas per renderer
+const renderers = {};
+const FLAT_NOW = () => look.renderer === 'flat';
 
 /**
  * Say so when the renderer cannot start.
@@ -49,7 +73,7 @@ rendererModule.catch(() => {});
  */
 function reportFailure(err) {
   // the flat renderer has no WebGL to report on, and asking would open some
-  const s = FLAT ? { renderer: 'Canvas 2D' } : support();
+  const s = FLAT_NOW() ? { renderer: 'Canvas 2D' } : support();
   const detail = [
     err && err.message ? err.message : String(err),
     err && err.stack ? err.stack : '',
@@ -68,7 +92,7 @@ function reportFailure(err) {
   h.textContent = 'This machine cannot run the renderer';
   h.style.cssText = 'font:400 24px/1.3 Georgia,serif;margin:0 0 12px';
   const p = document.createElement('p');
-  p.textContent = FLAT
+  p.textContent = FLAT_NOW()
     ? 'The flat renderer stopped with the error below.'
     : s.webgl2
       ? 'The browser has WebGL 2 but is missing something the renderer needs.'
@@ -307,18 +331,23 @@ let drag = null;
 for (const type of ['pointerdown', 'pointermove', 'wheel', 'keydown']) {
   window.addEventListener(type, () => { lastTouch = performance.now(); }, { passive: true });
 }
-canvas.addEventListener('pointerdown', (e) => {
-  canvas.setPointerCapture?.(e.pointerId);
+// Both stages take the same hand, so these listen from the document and ask
+// whether it was a stage that was touched.
+const onStage = (e) => e.target === canvas || e.target?.classList?.contains('stage');
+const setDragging = (on) => { for (const c of Object.values(stages)) c.classList.toggle('dragging', on); };
+document.addEventListener('pointerdown', (e) => {
+  if (!onStage(e)) return;
+  e.target.setPointerCapture?.(e.pointerId);
   drag = { x: e.clientX, y: e.clientY, moved: 0, startY: cam.ty, startX: cam.tx };
 });
 
-canvas.addEventListener('pointermove', (e) => {
+document.addEventListener('pointermove', (e) => {
   if (!drag) return;
   const dx = e.clientX - drag.x;
   const dy = e.clientY - drag.y;
   drag.moved = Math.max(drag.moved, Math.hypot(dx, dy));
   if (drag.moved > 4) {
-    canvas.classList.add('dragging');
+    setDragging(true);
     cam.free = true;
     cam.ty = drag.startY + dy / cam.zoom;
     cam.tx = drag.startX - dx / cam.zoom;
@@ -329,14 +358,15 @@ canvas.addEventListener('pointermove', (e) => {
 
 const endDrag = (e) => {
   if (!drag) return;
-  canvas.classList.remove('dragging');
+  setDragging(false);
   if (drag.moved <= 4) inspectAt(e.clientX, e.clientY);
   drag = null;
 };
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', () => { drag = null; canvas.classList.remove('dragging'); });
+document.addEventListener('pointerup', endDrag);
+document.addEventListener('pointercancel', () => { drag = null; setDragging(false); });
 
-canvas.addEventListener('wheel', (e) => {
+document.addEventListener('wheel', (e) => {
+  if (!onStage(e)) return;
   e.preventDefault();
   if (e.ctrlKey || e.metaKey) {
     cam.tz = clamp(cam.tz * Math.exp(-e.deltaY * 0.0016), 0.08, 1.8);
@@ -489,7 +519,9 @@ let frames = 0;
 window.flower = {
   get frames() { return frames; },
   get target() { return renderer ? [renderer.pw, renderer.ph] : null; },
-  get canvas() { return [canvas.width, canvas.height]; },
+  get canvas() { const c = renderer?.canvas || canvas; return [c.width, c.height]; },
+  get look() { return look.id; },
+  setLook: (id) => useLook(id),
   get cam() { return { x: cam.x, y: cam.y, zoom: cam.zoom, free: cam.free }; },
   get growing() { return growing ? progress : null; },
   get glError() {
@@ -518,8 +550,8 @@ window.flower = {
           // a 2D canvas keeps what it drew, and can say so itself
           if (renderer.capture) { renderer.capture().then(resolve, reject); return; }
           const gl = renderer.gl;
-          const w = canvas.width;
-          const h = canvas.height;
+          const w = renderer.canvas.width;
+          const h = renderer.canvas.height;
           const px = new Uint8Array(w * h * 4);
           gl.bindFramebuffer(gl.FRAMEBUFFER, null);
           gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
@@ -568,6 +600,7 @@ function draw(now) {
     clamp((top - 2600) / 5200, 0, 1),
     era(now),
   );
+  if (look.idiom === 43) renderer.setText?.(words());
   renderer.render(engine.plant, cam, now, engine.plant.sections,
     growing ? { step: growing.step, progress } : null);
 }
@@ -629,11 +662,7 @@ function loadSaved() {
  */
 async function boot() {
   try {
-    const m = await rendererModule;
-    renderer = FLAT
-      ? new m.Renderer2D(canvas)
-      // ?style=real shows the lit look v3 was drawn over, for comparing
-      : new m.Renderer3D(canvas, { style: new URLSearchParams(location.search).get('style') || 'toon' });
+    await useLook(look.id, true);
   } catch (err) {
     reportFailure(err);
     return;
@@ -642,6 +671,121 @@ async function boot() {
   snapCameraToNow(true);
   requestAnimationFrame(frame);
 }
+
+/** The words the ASCII look is set in, made again only when there are more. */
+let wordsKey = null;
+let wordsNow = '';
+function words() {
+  const key = engine.plant.sections.length + ':' + (engine.prompt?.id ?? '');
+  if (key !== wordsKey) { wordsKey = key; wordsNow = wordsOf(engine); }
+  return wordsNow;
+}
+
+/** The canvas a renderer draws on: the page's own for the first, a twin for the other. */
+function stageFor(kind) {
+  if (stages[kind]) return stages[kind];
+  let c = canvas;
+  if (Object.keys(stages).length) {
+    c = document.createElement('canvas');
+    c.className = 'stage';
+    c.style.display = 'none';
+    canvas.after(c);
+  }
+  stages[kind] = c;
+  return c;
+}
+
+/**
+ * Draw the whole picture another way, from now on. The plant, the place and the
+ * camera are untouched: only the hand changes. Throws if the look's renderer
+ * cannot start on this machine, leaving the one that was showing in place.
+ */
+let switching = 0;
+async function useLook(id, first = false) {
+  const next = LOOK_BY_ID[id];
+  if (!next || (!first && next === look)) return look;
+  const turn = ++switching;
+  const kind = next.renderer;
+  const m = await fetchRenderer(kind);
+  if (turn !== switching) return look;       // another was asked for meanwhile
+  if (!renderers[kind]) {
+    const c = stageFor(kind);
+    try {
+      renderers[kind] = kind === 'flat' ? new m.Renderer2D(c) : new m.Renderer3D(c, { style: next.style });
+    } catch (err) {
+      // a canvas that failed to give a context is no use to a second try
+      if (c !== canvas) { c.remove(); delete stages[kind]; }
+      throw err;
+    }
+  }
+  for (const [k, c] of Object.entries(stages)) c.style.display = k === kind ? '' : 'none';
+  renderer = renderers[kind];
+  renderer.resize();
+  renderer.setLook?.(next.style, next.idiom);
+  renderer.invalidate();
+  look = next;
+  picker?.show(look);
+  if (!first) {
+    if (!cam.free) snapCameraToNow(true);
+    if (!SANDBOX) {
+      try {
+        const kept = JSON.parse(localStorage.getItem(LOOK_KEY) || 'null') || {};
+        kept[PAGE_LOOK] = look.id;
+        localStorage.setItem(LOOK_KEY, JSON.stringify(kept));
+      } catch { /* full or blocked: the look still holds for this visit */ }
+    }
+  }
+  return look;
+}
+
+/**
+ * The one control a look needs: what the picture is drawn in now, and the
+ * others. Built here rather than in the page so both pages get it.
+ */
+const picker = (() => {
+  const overlay = document.getElementById('overlay');
+  if (!overlay) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'looks';
+  const button = document.createElement('button');
+  button.className = 'chip';
+  button.type = 'button';
+  button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
+  const list = document.createElement('div');
+  list.className = 'looks-list';
+  list.setAttribute('role', 'listbox');
+  list.hidden = true;
+  const open = (on) => { list.hidden = !on; button.setAttribute('aria-expanded', String(on)); };
+  const items = LOOKS.map((l) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.setAttribute('role', 'option');
+    b.textContent = l.name;
+    b.addEventListener('click', async () => {
+      open(false);
+      try {
+        await useLook(l.id);
+      } catch (err) {
+        console.error('[flower] look could not start', err);
+        ui.showNote(`${l.name} cannot be drawn on this machine.`);
+      }
+    });
+    list.append(b);
+    return b;
+  });
+  button.addEventListener('click', () => open(list.hidden));
+  document.addEventListener('pointerdown', (e) => { if (!wrap.contains(e.target)) open(false); });
+  window.addEventListener('keydown', (e) => { if (e.key === 'Escape') open(false); });
+  wrap.append(button, list);
+  overlay.prepend(wrap);
+  const show = (l) => {
+    button.textContent = l.name;
+    items.forEach((b, i) => b.setAttribute('aria-selected', String(LOOKS[i] === l)));
+  };
+  show(look);
+  return { show };
+})();
 
 // The question first, then the plant.
 //

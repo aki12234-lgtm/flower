@@ -19,7 +19,9 @@
 // small off-screen: all this keeps of it is one colour per stitch.
 
 import { RendererCrafted } from '../flat/crafted.js';
-import { stemColour, flowerHueFor, bloomColour, PIGMENT } from '../gl/scene.js';
+import { stemColour } from '../gl/scene.js';
+import { buildFlatHeads } from '../flat/plant2d.js';
+import { outlineOf } from '../flat/paint.js';
 import { makeRng } from '../rng.js';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -37,6 +39,14 @@ function rgbOf(h, s, l) {
   return [f(0), f(8), f(4)];
 }
 /** A yarn of a colour: dyed wool holds its colour, and is never very pale or very dark. */
+/** A colour as hue (degrees), saturation and lightness (percent). */
+function hslOf([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, dd = mx - mn;
+  if (dd < 1e-6) return { h: 0, s: 0, l: l * 100 };
+  const s = dd / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? ((g - b) / dd + 6) % 6 : mx === g ? (b - r) / dd + 2 : (r - g) / dd + 4;
+  return { h: h * 60, s: s * 100, l: l * 100 };
+}
 const yarnOf = (c) => rgbOf(c.h, clamp(c.s * 1.05, 34, 80), clamp(c.l * 1.1 + 6, 34, 64));
 
 const COMMON = `#version 300 es
@@ -328,7 +338,6 @@ export class RendererYarn {
     const css = (rgb) => `rgb(${rgb.map((q) => Math.round(q * 255)).join(',')})`;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
-    const flowerHue = flowerHueFor(plant);
     const blob = (x, y, rx, ry, rot, colour) => {
       ctx.fillStyle = colour;
       ctx.beginPath();
@@ -355,54 +364,45 @@ export class RendererYarn {
         ctx.lineWidth = Math.max(1, lw * 0.22); ctx.strokeStyle = css(sy.map((q) => Math.min(1, q * 1.28 + 0.05))); run();
         ctx.restore();
       }
-      const pig = PIGMENT[section.materialId] || PIGMENT.botanical;
-      for (const node of section.nodes) {
-        const open = growing ? clamp((kMax - Math.max(0, node.k - 2.2)) / 2.2, 0, 1) : 1;
-        if (open <= 0) continue;
-        const ax = Math.cos(node.angle);
-        const ay = -Math.sin(node.angle);
-        const px = X(node.x);
-        const py = Y(node.y);
-        if (node.kind === 'leaf') {
-          const L = Math.max(3, (node.size * v.zoom * d * 2.2) / g.cw) * open;
-          const lf = yarnOf({ h: 112, s: 48, l: 34 });
-          const lx = px + ax * L * 0.5, ly = py + ay * L * 0.5 * (g.cw / g.ch), rot = Math.atan2(ay, ax);
-          blob(lx, ly, L * 0.5, L * 0.27, rot, css(lf.map((q) => q * 0.60)));
-          blob(lx, ly, L * 0.5 - 0.9, L * 0.27 - 0.9, rot, css(lf));
-          // the lit half of the blade, and the rib down the middle
-          ctx.save(); ctx.beginPath(); ctx.ellipse(lx, ly, Math.max(0.8, L * 0.5 - 0.9), Math.max(0.8, L * 0.27 - 0.9), rot, Math.PI, Math.PI * 2); ctx.fillStyle = css(lf.map((q) => Math.min(1, q * 1.22 + 0.03))); ctx.fill(); ctx.restore();
-          ctx.strokeStyle = css(lf.map((q) => q * 0.60)); ctx.lineWidth = 1;
-          ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(px + ax * L * 0.86, py + ay * L * 0.86 * (g.cw / g.ch)); ctx.stroke();
-          continue;
-        }
-        const R = Math.max(5, (node.size * v.zoom * d * 1.3) / g.cw) * open;
-        const cx = px + ax * R * 0.95;
-        const cy = py + ay * R * 0.95 * (g.cw / g.ch);
-        const petals = 5 + (node.seed % 2);
-        const spin = (node.seed % 628) / 100;
-        // two shades of the one yarn, petal by petal, so a flower a few stitches
-        // across is still petals and not a patch
-        const bc = bloomColour(hsl, node, flowerHue, pig);
-        const by = yarnOf(bc);
-        const pets = [css(by.map((q) => Math.min(1, q * 1.16 + 0.03))), css(by.map((q) => q * 0.78))];
-        // a petal at a time, as it opens
-        const shown = Math.ceil(petals * open);
-        for (let i = 0; i < shown; i++) {
-          const a = spin + (i / petals) * Math.PI * 2;
-          const k = g.cw / g.ch;
-          const ex = cx + Math.cos(a) * R * 0.58, ey = cy + Math.sin(a) * R * 0.58 * k;
-          // each petal: a dark edge, its body, a pale tip, and a vein back to the heart
-          blob(ex, ey, R * 0.48, R * 0.48 * k, 0, css(by.map((q) => q * 0.52)));
-          blob(ex, ey, R * 0.48 - 0.9, (R * 0.48 - 0.9) * k, 0, pets[i % 2]);
-          blob(cx + Math.cos(a) * R * 0.78, cy + Math.sin(a) * R * 0.78 * k, R * 0.20, R * 0.20 * k, 0, css(by.map((q) => Math.min(1, q * 1.36 + 0.08))));
-          ctx.strokeStyle = css(by.map((q) => q * 0.52)); ctx.lineWidth = 0.9;
-          ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(a) * R * 0.62, cy + Math.sin(a) * R * 0.62 * k); ctx.stroke();
-        }
-        const kk = g.cw / g.ch;
-        const heart = yarnOf({ h: 44, s: 76, l: 52 });
-        blob(cx, cy, R * 0.30, R * 0.30 * kk, 0, css(heart.map((q) => q * 0.62)));
-        blob(cx, cy, R * 0.30 - 0.8, (R * 0.30 - 0.8) * kk, 0, css(heart));
-        if (R > 6) blob(cx, cy, 0.8, 0.8, 0, css(heart.map((q) => q * 0.55)));
+    }
+    // The heads: every kind as the other looks build it (a bell is a bell, a
+    // spike a spike), worked in yarn. Worked as appliqué is: the whole head cut
+    // from a darker yarn a stitch bigger all round, then each part laid on it in
+    // its own colour, neighbouring parts a shade apart so they stay parts, and
+    // a paler stitch where a round part catches the light. No part thinner
+    // than two stitches, and no head smaller than a few stitches across: a
+    // thinner one is a row of dots, and a smaller one a speck of one colour.
+    const perStitch = (v.zoom * d) / g.cw;
+    const least = 5.2 / perStitch;
+    const key = plant.sections.length + '|' + (reveal ? reveal.step + ':' + reveal.progress.toFixed(3) : '-') + '|' + least.toFixed(2);
+    if (this.headsKey !== key) {
+      this.headsKey = key;
+      this.heads = buildFlatHeads(plant, reveal, (n) => Math.max(n.size, n.kind === 'leaf' ? least * 0.6 : least));
+    }
+    const kx = g.cw / g.ch;
+    const trace = (sh) => {
+      ctx.beginPath();
+      outlineOf(sh).forEach((p, i) => (i ? ctx.lineTo(X(p.x), Y(p.y)) : ctx.moveTo(X(p.x), Y(p.y))));
+      ctx.closePath();
+    };
+    // a pale petal stays pale: a head's yarns keep their lightness, where a stem's are held darker
+    const headYarn = (c) => rgbOf(c.h, clamp(c.s * 1.05, 30, 80), clamp(c.l * 1.02 + 4, 34, 80));
+    const parts = this.heads.filter((sh) => outlineOf(sh).length >= 3).map((sh, i) => ({ sh, col: headYarn(hslOf(sh.ink.rgb)), i }));
+    for (const { sh, col } of parts) {
+      trace(sh);
+      ctx.fillStyle = ctx.strokeStyle = css(col.map((q) => q * 0.5));
+      ctx.lineWidth = 2.6;
+      ctx.fill(); ctx.stroke();
+    }
+    for (const { sh, col, i } of parts) {
+      const c = css(col.map((q) => Math.min(1, q * (i % 2 ? 0.92 : 1.05))));
+      trace(sh);
+      ctx.fillStyle = ctx.strokeStyle = c;
+      ctx.lineWidth = 1.1;
+      ctx.fill(); ctx.stroke();
+      if (sh.type === 'disc') {
+        const r = sh.r * perStitch;
+        if (r > 1.4) blob(X(sh.x) - r * 0.3, Y(sh.y) - r * 0.3 * kx, r * 0.4, r * 0.4 * kx, 0, css(col.map((q) => Math.min(1, q * 1.3 + 0.07))));
       }
     }
     const oc = out.getContext('2d');

@@ -291,14 +291,15 @@ export class RendererCrafted extends Renderer2D {
         const p = P(node);
         const leaf = node.kind === 'leaf';
         const R = Math.max(leaf ? 8 : 15, node.size * v.zoom * (leaf ? 0.8 : 1.15)) * open;
-        const cx = p.x + Math.cos(node.angle) * R * 1.15;
-        const cy = p.y - Math.sin(node.angle) * R * 1.15;
+        // a node's angle is from straight up (growth.js DIRS): it points along (sin, cos)
+        const cx = p.x + Math.sin(node.angle) * R * 1.15;
+        const cy = p.y - Math.cos(node.angle) * R * 1.15;
         const word = (String(section.responseLabel || 'yes').replace(/[^A-Za-z0-9]/g, '') || 'yes').toUpperCase();
         const colour = leaf ? '#ffffff' : hsl({ h: c.h, s: Math.max(c.s, 80), l: 66 });
         if (leaf) {
           const fs = clamp(R * 0.9, 11, 18);
           for (let i = 0; i < 3; i++) {
-            letter(word[i % word.length], cx + Math.cos(node.angle) * (i - 1) * fs * 0.66, cy - Math.sin(node.angle) * (i - 1) * fs * 0.9, fs, colour);
+            letter(word[i % word.length], cx + Math.sin(node.angle) * (i - 1) * fs * 0.66, cy - Math.cos(node.angle) * (i - 1) * fs * 0.9, fs, colour);
           }
           continue;
         }

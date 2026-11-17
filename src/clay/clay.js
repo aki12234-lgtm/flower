@@ -21,7 +21,8 @@
 // It moves as a model does, a frame at a time.
 
 import { Renderer2D } from '../flat/renderer2d.js';
-import { stemColour, flowerHueFor, bloomColour, PIGMENT, PLACES } from '../gl/scene.js';
+import { stemColour, PLACES } from '../gl/scene.js';
+import { buildFlatHeads } from '../flat/plant2d.js';
 import { makeRng } from '../rng.js';
 
 const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
@@ -46,6 +47,8 @@ function stick(rgb, soft = 0.16) {
   return rgb.map((q) => clamp(mixn(mixn(l, q, 0.86), 0.92, soft), 0.06, 0.95));
 }
 const stickHsl = (c) => stick(rgbOf(c.h, clamp(c.s, 42, 80), clamp(c.l + 6, 42, 62)), 0.12);
+/** A head's plasticine: as chalky as a stem's, but a pale petal stays pale. */
+const petalStick = (c) => stick(rgbOf(c.h, clamp(c.s, 36, 80), clamp(c.l + 3, 40, 78)), 0.1);
 const shade = (rgb, k) => rgb.map((q) => clamp(q * k, 0, 1));
 const canvasOf = (w, h) => (typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(w, h) : Object.assign(document.createElement('canvas'), { width: w, height: h }));
 
@@ -99,6 +102,79 @@ function mat4inv(m) {
 }
 
 // ------------------------------------------------------------- pieces -----
+
+/** A colour as hue (degrees), saturation and lightness (percent). */
+function hslOf([r, g, b]) {
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, dd = mx - mn;
+  if (dd < 1e-6) return { h: 0, s: 0, l: l * 100 };
+  const s = dd / (1 - Math.abs(2 * l - 1));
+  const h = mx === r ? ((g - b) / dd + 6) % 6 : mx === g ? (b - r) / dd + 2 : (r - g) / dd + 4;
+  return { h: h * 60, s: s * 100, l: l * 100 };
+}
+
+/**
+ * A flat outline pressed out of plasticine: cut across its length into
+ * slices, each slice a flattened ball as wide as the outline is there, so the
+ * slab keeps the outline's shape — a heart a heart, a saw its teeth — and is
+ * thinner where it is narrower, as a pressed petal is at its tip.
+ */
+function slab(S, pts, z, col) {
+  const n = pts.length;
+  if (n < 3) return;
+  let mx = 0, my = 0;
+  for (const p of pts) { mx += p.x; my += p.y; }
+  mx /= n; my /= n;
+  let xx = 0, xy = 0, yy = 0;
+  for (const p of pts) { const dx = p.x - mx, dy = p.y - my; xx += dx * dx; xy += dx * dy; yy += dy * dy; }
+  const th = 0.5 * Math.atan2(2 * xy, xx - yy);
+  const ax = [Math.cos(th), Math.sin(th)], ay = [-ax[1], ax[0]];
+  const uv = pts.map((p) => [(p.x - mx) * ax[0] + (p.y - my) * ax[1], (p.x - mx) * ay[0] + (p.y - my) * ay[1]]);
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const [u, v] of uv) { u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+  const len = u1 - u0, wide = v1 - v0;
+  if (len < 0.5) return;
+  const K = clamp(Math.round(len / Math.max(1, wide * 0.2)), 4, 22);
+  const du = len / K;
+  const rows = [];
+  let single = true;
+  for (let k = 0; k < K; k++) {
+    const u = u0 + (k + 0.5) * du;
+    // filled as a canvas fills it (nonzero), so an outline that crosses
+    // itself — two lobes laid over each other — is one piece, not stripes
+    const cuts = [];
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const [ua, va] = uv[j], [ub, vb] = uv[i];
+      if ((ua <= u) !== (ub <= u)) cuts.push([va + ((u - ua) / (ub - ua)) * (vb - va), ub > ua ? 1 : -1]);
+    }
+    cuts.sort((a, b) => a[0] - b[0]);
+    let wind = 0, from = 0, spans = 0;
+    for (const [v, dir] of cuts) {
+      const was = wind;
+      wind += dir;
+      if (!was && wind) from = v;
+      else if (was && !wind) { rows.push({ u, v: (from + v) / 2, hw: (v - from) / 2 }); spans++; }
+    }
+    if (spans > 1) single = false;
+  }
+  // an outline that is near enough an ellipse is one pressed ball, not slices
+  let area = 0;
+  for (let i = 0, j = n - 1; i < n; j = i++) area += uv[j][0] * uv[i][1] - uv[i][0] * uv[j][1];
+  const fill = Math.abs(area) / 2 / (Math.PI * (len / 2) * (wide / 2));
+  if (single && fill > 0.86 && fill < 1.1) {
+    const t = clamp(Math.min(len, wide) * 0.16, 1.1, 6);
+    const cx = mx + ax[0] * (u0 + u1) / 2 + ay[0] * (v0 + v1) / 2, cy = my + ax[1] * (u0 + u1) / 2 + ay[1] * (v0 + v1) / 2;
+    S.lump([cx, cy, z + t * 0.6], [ax[0] * len / 2, ax[1] * len / 2, 0], [ay[0] * wide / 2, ay[1] * wide / 2, 0], [0, 0, t], col);
+    return;
+  }
+  for (const r of rows) {
+    if (r.hw < 0.3) continue;
+    const cx = mx + ax[0] * r.u + ay[0] * r.v, cy = my + ax[1] * r.u + ay[1] * r.v;
+    const t = clamp(r.hw * 0.32, 1.1, 5);
+    // long enough to run well into the next slice, so the slab reads as one piece
+    const L = Math.min(du * 2.6, r.u - u0 + du * 0.3, u1 - r.u + du * 0.3);
+    S.lump([cx, cy, z + t * 0.6], [ax[0] * L, ax[1] * L, 0], [ay[0] * r.hw, ay[1] * r.hw, 0], [0, 0, t], col);
+  }
+}
 
 /** Solids, sixteen numbers each: centre, three vectors, colour and kind. */
 class Solids {
@@ -634,7 +710,6 @@ export class RendererClay {
   /** The plant as it would be made: coils, petals pressed from balls, a bead for a heart. */
   plantSolids(plant, reveal) {
     const S = new Solids();
-    const flowerHue = flowerHueFor(plant);
     for (const section of plant.sections) {
       const growing = reveal && section.step === reveal.step;
       const kMax = growing ? reveal.progress * section.steps : Infinity;
@@ -653,39 +728,30 @@ export class RendererClay {
           S.coil([a.x, a.y, wob(a)], [b.x, b.y, wob(b)], rr, sc);
         }
       }
-      const pig = PIGMENT[section.materialId] || PIGMENT.botanical;
-      for (const node of section.nodes) {
-        const open = growing ? clamp((kMax - Math.max(0, node.k - 2.2)) / 2.2, 0, 1) : 1;
-        if (open <= 0) continue;
-        const ax = Math.cos(node.angle);
-        const ay = Math.sin(node.angle);
-        const base = [node.x, node.y, 0];
-        if (node.kind === 'leaf') {
-          const L = Math.max(26, node.size * 2.3) * open;
-          const along = norm([ax, ay, 0.35]);
-          const side = norm(cross(along, [0, 0, 1]));
-          const tw = norm(add(side, [0, 0, 0.45]));
-          const C = norm(cross(along, tw));
-          S.lump(add(base, mul(along, L * 0.5)), mul(along, L * 0.5), mul(tw, L * 0.22), mul(C, L * 0.07), stick(hex('#59b05a'), 0.14));
-          continue;
+    }
+    // The heads, kind by kind as every other look builds them, each part made
+    // the way it would be by hand: a round part a ball, a stalk a coil, and a
+    // petal or a leaf a pressed slab of its own outline.
+    const key = plant.sections.length + '|' + (reveal ? reveal.step + ':' + reveal.progress.toFixed(3) : '-');
+    if (this.headsKey !== key) {
+      this.headsKey = key;
+      // a little bigger than drawn: a head is pressed from a ball that has to be handled
+      this.heads = buildFlatHeads(plant, reveal, (n) => Math.max(n.size * 1.3, n.kind === 'leaf' ? 11 : 18));
+    }
+    let order = 0;
+    for (const sh of this.heads) {
+      // parts of one head stand in front of one another as they are layered
+      const z = 3 + ((sh.z % 1) * 1000) * 2.2 + (order++ % 6) * 0.35;
+      const col = petalStick(hslOf(sh.ink.rgb));
+      if (sh.type === 'disc') {
+        const r = Math.max(2, sh.r);
+        S.ball([sh.x, sh.y, z + r * 0.2], r, col, 1, 1, 0.8);
+      } else if (sh.type === 'band') {
+        for (let i = 1; i < sh.pts.length; i++) {
+          const a = sh.pts[i - 1], b = sh.pts[i];
+          S.coil([a.x, a.y, z], [b.x, b.y, z], Math.max(1.6, (a.l + a.r + b.l + b.r) / 4), col);
         }
-        const R = Math.max(28, node.size * 1.45) * open;
-        const c = add(base, [ax * R * 0.9, ay * R * 0.9, R * 0.15]);
-        const petals = 5 + (node.seed % 2);
-        const spin = (node.seed % 628) / 100;
-        const by = stickHsl(bloomColour(hsl, node, flowerHue, pig));
-        const shown = Math.ceil(petals * open);
-        for (let i = 0; i < shown; i++) {
-          const a = spin + (i / petals) * Math.PI * 2;
-          const d = [Math.cos(a), Math.sin(a), 0];
-          // each petal cups forward a little, as a pressed ball does when it is pinched
-          const A = mul(norm(add(d, [0, 0, 0.32])), R * 0.46);
-          const B = mul([-d[1], d[0], 0], R * 0.33);
-          const Cc = mul(norm(cross(A, B)), R * 0.11);
-          S.lump(add(c, add(mul(d, R * 0.52), [0, 0, (i % 2) * 2])), A, B, Cc, shade(by, i % 2 ? 0.94 : 1.04));
-        }
-        S.ball(add(c, [0, 0, R * 0.16]), R * 0.27, stick(hex('#ffcf45'), 0.1), 1, 1, 0.7);
-      }
+      } else slab(S, sh.pts, z, shade(col, order % 2 ? 0.93 : 1.04));   // a petal a shade off its neighbour, so they stay petals
     }
     return S;
   }

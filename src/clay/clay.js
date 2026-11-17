@@ -212,14 +212,14 @@ ${shadow ? '' : `
   // The surface of the stuff: smoothed with a thumb, so gently uneven, with a
   // fine tooth that only shows close to. Fixed to the piece, not the screen.
   float far = length(p - uEye) * uPixel;
-  float e = 0.9;
+  float e = 1.2;
   vec3 q = p + vCol.rgb * 97.0;
   #define DENT(x) (n3((x) * 0.020) * 7.0 + n3((x) * 0.055 + 11.0) * 2.2)
-  #define TOOTH(x) (n3((x) * 0.55) * 0.30 + n3((x) * 1.4) * 0.12)
+  #define TOOTH(x) (n3((x) * 0.16) * 0.55 + n3((x) * 0.37 + 5.0) * 0.18)
   float d0 = DENT(q), g0 = TOOTH(q);
   vec3 grad = vec3(DENT(q + vec3(e, 0, 0)) - d0, DENT(q + vec3(0, e, 0)) - d0, DENT(q + vec3(0, 0, e)) - d0) / e;
   vec3 gt = vec3(TOOTH(q + vec3(e, 0, 0)) - g0, TOOTH(q + vec3(0, e, 0)) - g0, TOOTH(q + vec3(0, 0, e)) - g0) / e;
-  grad += gt * (1.0 - smoothstep(0.6, 2.2, far));
+  grad += gt * (1.0 - smoothstep(0.9, 2.4, far));
   grad -= n * dot(grad, n);
   n = normalize(n - grad * 1.25);
   // a little more or less chalk in one handful than the next
@@ -254,13 +254,13 @@ const vec2 POISSON[12] = vec2[12](vec2(-0.326, -0.406), vec2(-0.840, -0.074), ve
   vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
 void main() {
   float d = texture(uDepth, vUv).r;
-  float jit = h21(gl_FragCoord.xy + uTake);
+  float jit = 0.37;
   if (d >= 0.99999) {
     // the painted sweep behind the set, lit brighter in the middle
     vec3 rd = normalize(worldAt(vUv, 1.0) - uEye);
     float up = clamp(rd.y * 1.6 + 0.5, 0.0, 1.0);
     vec3 wall = mix(uWallLow, uWallTop, up);
-    wall *= 0.90 + 0.10 * n3(rd * 9.0) + 0.04 * n3(rd * 40.0);
+    wall *= 0.92 + 0.10 * n3(rd * 7.0);
     float pool = 1.0 - smoothstep(0.0, 0.9, length((vUv - vec2(0.45, 0.62)) * vec2(1.0, 1.3)));
     wall = pow(wall, vec3(2.2)) * (0.78 + 0.42 * pool);
     outColour = vec4(wall, 1.0);
@@ -280,7 +280,7 @@ void main() {
     lit = 0.0;
     float a = jit * 6.2832; mat2 rot = mat2(cos(a), sin(a), -sin(a), cos(a));
     for (int i = 0; i < 12; i++) {
-      vec2 o = rot * POISSON[i] * (5.5 / ${SHADOW.toFixed(1)});
+      vec2 o = rot * POISSON[i] * (4.0 / ${SHADOW.toFixed(1)});
       lit += lp.z - 0.0012 <= texture(uShadow, lp.xy + o).r ? 1.0 : 0.0;
     }
     lit /= 12.0;
@@ -346,7 +346,10 @@ vec3 tone(vec3 c) {
 void main() {
   vec2 px = 1.0 / uRes;
   float c0 = coc(vUv);
-  vec3 sum = texture(uLit, vUv).rgb; float wsum = 1.0;
+  vec3 sum = texture(uLit, vUv).rgb * 0.36
+    + (texture(uLit, vUv + px * vec2(0.6, 0.6)).rgb + texture(uLit, vUv + px * vec2(-0.6, 0.6)).rgb
+     + texture(uLit, vUv + px * vec2(0.6, -0.6)).rgb + texture(uLit, vUv + px * vec2(-0.6, -0.6)).rgb) * 0.16;
+  float wsum = 1.0;
   float R = uCocMax;
   for (int i = 0; i < 32; i++) {
     float fi = float(i) + 0.5;
@@ -365,7 +368,7 @@ void main() {
   col = mix(col, col * vec3(1.03, 1.0, 0.95), 0.6);
   float v = length((vUv - 0.5) * vec2(1.0, 1.1));
   col *= 1.0 - smoothstep(0.42, 1.0, v) * 0.32;
-  col += (h21(gl_FragCoord.xy + uTake * 7.0) - 0.5) * 0.018;
+  col += (h21(gl_FragCoord.xy) - 0.5) * 0.006;
   outColour = vec4(col, 1.0);
 }`;
 
@@ -646,7 +649,7 @@ export class RendererClay {
         const wob = (p) => Math.sin(p.x * 0.031 + p.y * 0.017) * r * 0.35 + Math.sin(p.y * 0.053) * r * 0.2;
         for (let i = 1; i < pts.length; i++) {
           const a = pts[i - 1], b = pts[i];
-          const rr = r * (0.94 + 0.08 * Math.sin((a.x + b.x) * 0.006 + (a.y + b.y) * 0.004));
+          const rr = r;   // (one thickness down a run: any step between two coils shows as a seam)
           S.coil([a.x, a.y, wob(a)], [b.x, b.y, wob(b)], rr, sc);
         }
       }

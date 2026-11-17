@@ -347,7 +347,12 @@ export const STEM_CLEAR = 1;
 /** Would the step end, or pass its middle, nearer than STEM_CLEAR to a stem other than the one just grown? */
 function hugsStem(stems, tip, x1, y1, stepLen) {
   const clear = STEM_CLEAR * stepLen;
-  const recent = (tip.arc || 0) - stepLen * 2.5;
+  // the last two steps it took are where it is coming from, and a sharp
+  // turn may come back close to those; the few before them it keeps a little
+  // further from than from anything else, so a turn cannot come round into a U
+  const recent = (tip.arc || 0) - stepLen * 1.5;
+  const own = (tip.arc || 0) - stepLen * 4.5;
+  const OWN_CLEAR = 1.2;
   const mx = (tip.x + x1) / 2, my = (tip.y + y1) / 2;
   const dist = (st, px, py) => {
     const dx = st.x1 - st.x0, dy = st.y1 - st.y0;
@@ -360,9 +365,10 @@ function hugsStem(stems, tip, x1, y1, stepLen) {
     // for its first step, the pieces it is joined to where it set out
     if (tip.ox !== undefined && (tip.arc || 0) < stepLen * 0.5
       && Math.min(Math.hypot(st.x0 - tip.ox, st.y0 - tip.oy), Math.hypot(st.x1 - tip.ox, st.y1 - tip.oy)) < stepLen * 0.35) continue;
-    if (Math.min(st.x0, st.x1) > Math.max(tip.x, x1) + clear || Math.max(st.x0, st.x1) < Math.min(tip.x, x1) - clear
-      || Math.min(st.y0, st.y1) > Math.max(tip.y, y1) + clear || Math.max(st.y0, st.y1) < Math.min(tip.y, y1) - clear) continue;
-    if (dist(st, x1, y1) < clear || dist(st, mx, my) < clear * 0.8) return true;
+    const c = st.tip === tip.id && st.arc >= own ? clear * OWN_CLEAR : clear;
+    if (Math.min(st.x0, st.x1) > Math.max(tip.x, x1) + c || Math.max(st.x0, st.x1) < Math.min(tip.x, x1) - c
+      || Math.min(st.y0, st.y1) > Math.max(tip.y, y1) + c || Math.max(st.y0, st.y1) < Math.min(tip.y, y1) - c) continue;
+    if (dist(st, x1, y1) < c || dist(st, mx, my) < c * 0.8) return true;
   }
   return false;
 }

@@ -1296,9 +1296,14 @@ void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
 /**
  * The illustrated look's inking (see printed() below): the world's shade side
  * laid down in solid black, as a comic is inked, and a fine line — the heavy
- * one competed with the black for the same job.
+ * one competed with the black for the same job. The line is in ultramarine,
+ * so it reads as a second ink over the black rather than the edge of it.
  */
-const PRINT_INK = { shadeBlack: 1, line: 1.2, plantLine: 0.7 };
+const PRINT_INK = { shadeBlack: 1, line: 1.2, plantLine: 0.7, lineColour: '#2b3fc4' };
+/** The line's colour, linear, as GLSL: its own when given, else the ink the shade is laid in. */
+const LINE_INK_GLSL = PRINT_INK.lineColour
+  ? `vec3(${[1, 3, 5].map((i) => Math.pow(parseInt(PRINT_INK.lineColour.slice(i, i + 2), 16) / 255, 2.2).toFixed(4)).join(', ')})`
+  : 'uInk';
 
 const POST_FS = `#version 300 es
 precision highp float;
@@ -1442,7 +1447,7 @@ vec3 printed() {
     float over = clamp((a - floor(a + 0.05)) / OVER_SLOT, 0.0, 1.0);
     base = mix(base, uInk, smoothstep(0.10, 0.30, over) * SHADE_BLACK);
   }
-  vec3 col = pow(mix(base, uInk, line), vec3(1.0 / 2.2));
+  vec3 col = pow(mix(base, ${LINE_INK_GLSL}, line), vec3(1.0 / 2.2));
   return col;
 }
 

@@ -39,7 +39,8 @@ const canvas = document.getElementById('stage');
 // player's to change at any moment (looks.js), and each renderer is fetched
 // the first time a look needs it and kept, on a canvas of its own: a canvas
 // that has given out a WebGL context can never give a 2D one, or the reverse.
-const PAGE_LOOK = document.documentElement.dataset.renderer === 'flat' ? 'flat' : 'print';
+// (v4's page asked for Flat, which is now Illustrated: every page opens on that)
+const PAGE_LOOK = 'print';
 const QUERY = new URLSearchParams(location.search);
 function firstLook() {
   // ?look=riso opens on one; ?style=real is the older way of asking for 3D
@@ -54,7 +55,6 @@ function firstLook() {
 }
 let look = LOOK_BY_ID[firstLook()];
 const load = {
-  flat: () => import('./flat/renderer2d.js'),
   gl: () => import('./gl/renderer3d.js'),
   v1: () => import('../versions/v1/src/gl/renderer3d.js'),
   made: () => import('./flat/crafted.js'),
@@ -68,7 +68,7 @@ const fetchRenderer = (kind) => (modules[kind] ||= load[kind]());
 fetchRenderer(look.renderer).catch(() => {});
 const stages = {};       // one canvas per renderer
 const renderers = {};
-const FLAT_NOW = () => look.renderer === 'flat' || look.renderer === 'made';
+const FLAT_NOW = () => look.renderer === 'made';
 
 /**
  * Say so when the renderer cannot start.
@@ -719,8 +719,7 @@ async function useLook(id, first = false) {
   if (!renderers[kind]) {
     const c = stageFor(kind);
     try {
-      renderers[kind] = kind === 'flat' ? new m.Renderer2D(c)
-        : kind === 'made' ? new m.RendererCrafted(c, { mode: next.id })
+      renderers[kind] = kind === 'made' ? new m.RendererCrafted(c, { mode: next.id })
           : kind === 'yarn' ? new m.RendererYarn(c)
             : kind === 'riso' ? new m.RendererRiso(c)
               : kind === 'clay' ? new m.RendererClay(c)

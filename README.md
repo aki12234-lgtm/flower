@@ -42,8 +42,7 @@ Nothing else ever changes it.
 | | |
 |---|---|
 | **3D** | the lit renderer as it stood in v1 (`versions/v1`, frozen), drawing the current plant |
-| **Illustrated** | v3's print |
-| **Flat** | v4's 2D drawing |
+| **Illustrated** | v3's print: the shade side in solid black, a fine ultramarine line (v4's 2D Flat was the same picture, and is folded into it) |
 | **ASCII** | the world in small type, the plant in large: both are the questions asked and the answers given |
 | **Crochet** | one piece of knitting with the picture and the plant worked into it (`src/yarn/fabric.js`): real stocking stitch, loops through loops, every stitch relief under a light |
 | **Riso** | the lit 3D scene taken apart into three drums, blue, fluorescent pink and yellow, each screened into dots, slipped off register and laid on cream paper (`src/riso/press.js`) |

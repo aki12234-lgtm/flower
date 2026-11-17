@@ -8,13 +8,14 @@
 //
 // `renderer` is what draws it: 'v1' is the lit 3D renderer as it stood in v1
 // (versions/v1, frozen, and the look that was liked best), 'gl' the printed 3D
-// one, 'flat' the 2D one, and 'made' the looks made of one material throughout
-// (flat/crafted.js): type, and yarn.
+// one, and 'made' the looks made of one material throughout (flat/crafted.js):
+// type, and yarn. Flat, the 2D drawing of the print, was the same picture as
+// Illustrated and is folded into it; its renderer (flat/renderer2d.js) still
+// lays out the world the made looks and clay are built on.
 
 export const LOOKS = [
   { id: '3d', name: '3D', renderer: 'v1' },
   { id: 'print', name: 'Illustrated', renderer: 'gl' },
-  { id: 'flat', name: 'Flat', renderer: 'flat' },
   { id: 'ascii', name: 'ASCII', renderer: 'made' },
   { id: 'crochet', name: 'Crochet', renderer: 'yarn' },
   { id: 'riso', name: 'Riso', renderer: 'riso' },

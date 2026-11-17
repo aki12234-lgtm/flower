@@ -849,9 +849,10 @@ check('a rough material displaces its own surface', () => {
 });
 
 check('the ASCII look is set in what was asked and answered', () => {
-  for (const id of ['3d', 'print', 'flat', 'ascii', 'crochet', 'riso', 'clay']) if (!LOOK_BY_ID[id]) return `the ${id} look is missing`;
+  for (const id of ['3d', 'print', 'ascii', 'crochet', 'riso', 'clay']) if (!LOOK_BY_ID[id]) return `the ${id} look is missing`;
   if (new Set(LOOKS.map((l) => l.id)).size !== LOOKS.length) return 'two looks share an id';
-  if (!LOOK_BY_ID.print || !LOOK_BY_ID.flat) return 'the two pages have lost the look they open on';
+  if (!LOOK_BY_ID.print) return 'the pages have lost the look they open on';
+  if (LOOK_BY_ID.flat) return 'Flat is back: it was folded into Illustrated';
   const e = playGame('words', 'wordsg', alwaysFirst, 5);
   const text = wordsOf(e);
   for (const sec of e.plant.sections) {

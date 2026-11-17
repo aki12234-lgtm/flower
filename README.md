@@ -47,7 +47,7 @@ Nothing else ever changes it.
 | **ASCII** | the world in small type, the plant in large: both are the questions asked and the answers given |
 | **Crochet** | one piece of knitting with the picture and the plant worked into it (`src/yarn/fabric.js`): real stocking stitch, loops through loops, every stitch relief under a light |
 | **Riso** | the lit 3D scene taken apart into three drums, blue, fluorescent pink and yellow, each screened into dots, slipped off register and laid on cream paper (`src/riso/press.js`) |
-| **Clay** | a plasticine model set (`src/clay/clay.js`): its own set of fat rounded pieces in the place's colours, hills, trees, clouds, and the plant as coils, flattened balls and beads, each drawn as the true rounded solid and lit together under a soft lamp with real shadows; moved a frame at a time |
+| **Clay** | a stop-motion plasticine set in real 3D (`src/clay/clay.js`): its own set of rounded solids in the place's colours and the plant as hand-rolled coils, pressed petals and beads, each ray-traced exactly, lit by a soft lamp with shadows and occlusion, seen through a lens with depth of field; moved a frame at a time |
 
 ASCII and Crochet are `src/flat/crafted.js`. A look there is a material, not a
 filter: plant and world are the same stuff and still told apart (by the size of

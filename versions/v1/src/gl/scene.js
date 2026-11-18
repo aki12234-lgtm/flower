@@ -542,7 +542,7 @@ export function buildPlant(plant, reveal = null, opts = {}) {
       // is grown rather than moulded.
       const ages = R && prof.points.map((p) =>
         clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep));
-      tube(mb, path, 18,
+      tube(mb, path, R ? (globalThis.__stemSides ?? 7) : 18,
         (i, p) => {
           const nd = nodeAt[i];
           const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;

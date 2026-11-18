@@ -93,7 +93,7 @@ uniform sampler2D uShadow;
 uniform float uWorldIdiom;      // 0 = the world as it is; otherwise the manner it has taken on
 uniform float uUnderwater;      // 1 when the camera is in the sea rather than above it
 uniform float uGloom;           // 1 in a cave: no light but what falls through the break
-uniform float uFacet;           // 1: the 3D look's plant cut in facets, like the world it stands in
+uniform float uFacet;           // 1: the 3D look's plant cut in facets; 2: everything
 uniform float uRecede;          // 1 to hold the world back behind the plant; 0 to see it raw
 out vec4 outColour;
 
@@ -597,7 +597,7 @@ void main() {
   N = normalize(N - (T * (hx - h0) + Bt * (hy - h0)) * bumpStrength(matId) * 1.45 * uRelief);
   // The world is cut in facets, and a plant smooth to the last polygon in it
   // reads as pasted in from somewhere else. Cut it the same way.
-  if (uFacet > 0.5 && (matId == 32 || matId == 33)) {
+  if ((uFacet > 1.5 && matId != 27) || (uFacet > 0.5 && (matId == 32 || matId == 33))) {
     N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
     if (dot(N, V) < 0.0) N = -N;
   }
@@ -876,6 +876,7 @@ vec3 aces(vec3 x) {
 // there is least colour already, so a hazed hillside comes back and a petal
 // that is doing fine is left alone. A flat multiplier would take the picture
 // straight to poster paint, which is the other way to be wrong about this.
+uniform float uClean;           // 1: a render, not a photograph: no grain, no lens
 uniform float uVivid;           // extra saturation after the grade (the 3D look's)
 vec3 graded(vec3 c) {
   float mx = max(c.r, max(c.g, c.b));
@@ -1326,8 +1327,8 @@ void main() {
   vec2 ca = (vUv - 0.5) * 0.0006;
   vec4 rs = texture(uScene, vUv + ca);
   vec4 bs = texture(uScene, vUv - ca);
-  if (int(rs.a * 255.0 + 0.5) < 40) col.r = mix(col.r, rs.r, 0.6);
-  if (int(bs.a * 255.0 + 0.5) < 40) col.b = mix(col.b, bs.b, 0.6);
+  if (uClean < 0.5 && int(rs.a * 255.0 + 0.5) < 40) col.r = mix(col.r, rs.r, 0.6);
+  if (uClean < 0.5 && int(bs.a * 255.0 + 0.5) < 40) col.b = mix(col.b, bs.b, 0.6);
 
   col *= uExposure;
   col = aces(col);
@@ -1336,10 +1337,10 @@ void main() {
 
   // grain, and a little more of it in the shadows where film has more
   float g = fract(sin(dot(vUv * 1024.0 + uTime, vec2(12.9898, 78.233))) * 43758.5453);
-  col += (g - 0.5) * 0.020 * (1.3 - dot(col, vec3(0.33)));
+  col += (g - 0.5) * 0.020 * (1.3 - dot(col, vec3(0.33))) * (1.0 - uClean);
 
   float r = length((vUv - 0.5) * vec2(1.0, 1.15));
-  col *= 1.0 - smoothstep(0.42, 0.95, r) * 0.34;
+  col *= 1.0 - smoothstep(0.42, 0.95, r) * mix(0.34, 0.12, uClean);
 
   outColour = vec4(col, 1.0);
 }`;
@@ -1668,11 +1669,12 @@ export class Renderer3D {
     const night = this.nightness ?? 0;
     const dim = (c, k, tint) => c.map((v, i) => v * (1 - night * k) + night * tint[i]);
     const sun = dim(env.dark ? [1.9, 1.95, 2.2] : [4.2, 3.9, 3.4], 0.94, [0.10, 0.12, 0.22]);
-    const sky = dim(env.dark ? [0.06, 0.075, 0.12] : [0.20, 0.22, 0.26], 0.72, [0.05, 0.06, 0.13]);
+    const fill = this.real ? (globalThis.__fill ?? 1) : 1;
+    const sky = dim((env.dark ? [0.06, 0.075, 0.12] : [0.20, 0.22, 0.26]).map((v) => v * fill), 0.72, [0.05, 0.06, 0.13]);
     const ground = dim(env.dark ? [0.025, 0.025, 0.032] : [0.11, 0.095, 0.075], 0.80,
       [0.012, 0.013, 0.022]);
     setUniforms(gl, this.sceneProg, {
-      uFacet: this.real && (globalThis.__facet ?? 0) ? 1 : 0,
+      uFacet: this.real ? (globalThis.__facet ?? 2) : 0,
       uViewProj: viewProj,
       uLightViewProj: lightViewProj,
       uLightDir: LIGHT_DIR,
@@ -1681,7 +1683,7 @@ export class Renderer3D {
       uSkyColour: sky,
       uGroundColour: ground,
       uShadow: this.shadow.depth,
-      uRelief: this.reliefOff ? 0 : 1,
+      uRelief: this.reliefOff || (this.real && (globalThis.__flatSurf ?? 1)) ? 0 : 1,
       uSceneExposure: env.dark ? 1.25 : 1.0,
       uWorldKind: this.worldKind ?? 0,
       uNightness: this.nightness ?? 0,
@@ -1719,6 +1721,7 @@ export class Renderer3D {
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(this.postProg.p);
     setUniforms(gl, this.postProg, {
+      uClean: this.real && (globalThis.__clean ?? 1) ? 1 : 0,
       uVivid: this.real ? (globalThis.__vivid ?? 0.55) : 0,
       uScene: this.hdr.colour,
       uBackdrop: this.bg.colour,

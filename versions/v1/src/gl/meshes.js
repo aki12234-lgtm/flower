@@ -63,6 +63,15 @@ const cross = (a, b) => [
  * spinning about its own axis when the path turns — the twist shows up as a
  * crawling highlight and is very obvious on a shiny material.
  */
+/**
+ * How finely curved things are cut, as a multiple. The 3D look raises it while
+ * its plant is built, since that plant is seen close and in full light, where a
+ * petal of a dozen quads shows its straight edges.
+ */
+let DETAIL = 1;
+export function setDetail(k) { DETAIL = k; }
+const fine = (n) => Math.max(n, Math.round(n * DETAIL));
+
 export function tube(mb, path, sides, albedoAt, paramsAt, dispAt) {
   if (path.length < 2) return;
   const rings = [];
@@ -177,6 +186,7 @@ export function shard(mb, cx, cy, cz, r, jitter, albedo, params) {
 }
 
 export function sphere(mb, cx, cy, cz, r, rows, cols, albedo, params, dispAt) {
+  rows = fine(rows); cols = fine(cols);
   const base = mb.vertexCount;
   for (let i = 0; i <= rows; i++) {
     const phi = (i / rows) * Math.PI;
@@ -211,8 +221,9 @@ export function blade(mb, opts) {
   const {
     origin, dir, side, len, width, cup = 0.5, sweep = 0.35,
     tipTaper = 1, albedo, baseAlbedo = null, edgeAlbedo = null,
-    params, rows = 10, cols = 6, ripple = 0,
+    params, rows: rows0 = 10, cols: cols0 = 6, ripple = 0,
   } = opts;
+  const rows = fine(rows0), cols = fine(cols0);
   const up = norm(cross(dir, side));
   const base = mb.vertexCount;
 

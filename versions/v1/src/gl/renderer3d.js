@@ -1575,7 +1575,7 @@ export class Renderer3D {
       + ':' + Math.round((view?.w || 0) / 400) + ':' + Math.round((view?.h || 0) / 400);
     if (this.builtEnv !== envKey) {
       disposeMesh(gl, this.backdropMesh);
-      const built = buildBackdrop(env, view, this.worldKind ?? 0);
+      const built = buildBackdrop(env, view, this.worldKind ?? 0, { rounded: this.real && (globalThis.__rounded ?? 1) });
       this.backdropMesh = mesh(gl, this.sceneProg, built.data, built.indices, LAYOUT);
       this.backdropWide = built.wide;
       this.builtEnv = envKey;

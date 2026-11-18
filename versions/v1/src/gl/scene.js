@@ -9,7 +9,7 @@
 import { makeRng, clamp, clamp01, lerp, noise2 } from '../rng.js';
 import { MATERIAL_BY_ID, MATERIALS, nodeOutlines, stemProfile, roundCorners } from '../materials.js';
 import { ENV_BY_ID, ENVIRONMENTS } from '../environment.js';
-import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt } from './meshes.js';
+import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt, setDetail } from './meshes.js';
 
 const cross3 = (a, b) => {
   const c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -293,6 +293,20 @@ function bent(pts, round) {
       out.push({ ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t) });
     }
   }
+  return chaikin(chaikin(out));
+}
+
+/** Corner-cutting, twice over: the arcs' own segments stop showing as kinks. */
+function chaikin(pts) {
+  if (pts.length < 3) return pts;
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const at = (t) => ({ ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t) });
+    if (i > 0) out.push(at(0.25));
+    if (i < pts.length - 2) out.push(at(0.75));
+  }
+  out.push(pts[pts.length - 1]);
   return out;
 }
 
@@ -443,6 +457,15 @@ export function buildPlant(plant, reveal = null, opts = {}) {
   const mb = new MeshBuilder();
   const flowerHue = flowerHueFor(plant);
   const R = opts.real ? { ...REAL_STEMS, ...(globalThis.__realStems || {}) } : null;
+  setDetail(R ? 2.2 : 1);
+  try {
+    return buildPlantIn(plant, reveal, R, mb, flowerHue);
+  } finally {
+    setDetail(1);
+  }
+}
+
+function buildPlantIn(plant, reveal, R, mb, flowerHue) {
   const lastStep = Math.max(1, ...plant.sections.map((s) => s.step + 1));
 
   for (const section of plant.sections) {
@@ -475,7 +498,8 @@ export function buildPlant(plant, reveal = null, opts = {}) {
     const col = R ? realStemColour(section, answered, R) : answered;
     const rgb = hslToRgb(col.h, col.s, col.l);
     const salt = section.step * 3.7;
-    const relief = R ? stemRibs(salt) : reliefFor(section.materialId, salt);
+    // (real: a stem is smooth to the touch; its ridges are in the colour)
+    const relief = R ? null : reliefFor(section.materialId, salt);
 
     // ---- stems ----
     for (const seg of section.segments) {
@@ -542,7 +566,7 @@ export function buildPlant(plant, reveal = null, opts = {}) {
       // is grown rather than moulded.
       const ages = R && prof.points.map((p) =>
         clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep));
-      tube(mb, path, R ? (globalThis.__stemSides ?? 18) : 18,
+      tube(mb, path, R ? (globalThis.__stemSides ?? 28) : 18,
         (i, p) => {
           const nd = nodeAt[i];
           const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;
@@ -1396,21 +1420,52 @@ const placeAt = (kind) => PLACES[((kind % PLACES.length) + PLACES.length) % PLAC
  * seedling, so ground reads flat much further out here than feels right on
  * paper, for the same reason it does in life.
  */
+/**
+ * The 3D look's world is rounded: its plant is smooth, and land folded into
+ * creases and boulders broken into pyramids put it in a low-poly world it does
+ * not belong to. Set for the length of one backdrop build.
+ */
+let ROUNDED = false;
+
+/**
+ * Rounded ground is the same land drawn from noise that eases between its
+ * lattice points instead of running straight between them: a fine mesh over
+ * the ordinary noise shows every one of those straight runs as a zigzag ridge.
+ */
+function hash2(ix, iz, seed) {
+  let h = (ix * 374761393 + iz * 668265263 + seed * 1442695041) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function smoothNoise(x, z, seed) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const q = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  const ux = q(fx), uz = q(fz);
+  const a = hash2(ix, iz, seed), b = hash2(ix + 1, iz, seed);
+  const c = hash2(ix, iz + 1, seed), d = hash2(ix + 1, iz + 1, seed);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uz);
+}
+
 function groundHeight(x, z, place) {
+  return groundHeightRaw(x, z, place);
+}
+
+function groundHeightRaw(x, z, place) {
   const d = Math.hypot(x, z);
   const settle = clamp01((d - 2600) / 7000);
   const [a, b, c] = place.swell;
   // Which character this stretch of ground has, and it changes as you go.
-  const sharpness = clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4);
+  const sharpness = ROUNDED ? 0 : clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4);
   const ridged = (f, sc, amp) => {
     const v = noise2(x * sc, z * sc, f);
     return (1 - Math.abs(v * 2 - 1)) * amp - amp * 0.5;   // folded: creases, not swells
   };
-  const round = (f, sc, amp) => (noise2(x * sc, z * sc, f) - 0.5) * 2 * amp;
+  const round = (f, sc, amp) => ((ROUNDED ? smoothNoise : noise2)(x * sc, z * sc, f) - 0.5) * 2 * amp;
   const mixed = (f, sc, amp) => lerp(round(f, sc, amp), ridged(f, sc, amp * 1.5), sharpness);
   let h = mixed(31, 0.00030, a);
   h += mixed(77, 0.0011, b);
-  h += mixed(13, 0.0044, c);
+  if (!ROUNDED) h += mixed(13, 0.0044, c);
   if (place.dunes) {                        // long, and one-sided
     h += Math.sin(x * 0.0008 + noise2(z * 0.0006, 0, 5) * 3.0) * 150;
   }
@@ -1434,8 +1489,8 @@ function buildTerrain(mb, spanX, place) {
   const surf = place.rockFloor
     ? [SURFACE.rock[0], SURFACE.rock[1], SURFACE.rock[2], MAT_ID.rock]
     : [SURFACE.terrain[0], SURFACE.terrain[1], SURFACE.terrain[2], MAT_ID.terrain];
-  const cols = 128;
-  const rows = 80;
+  const cols = ROUNDED ? 220 : 128;
+  const rows = ROUNDED ? 220 : 80;
   const base = mb.vertexCount;
   const width = Math.max(spanX * 2.6, 26000);
   const tint = place.ground;
@@ -1451,11 +1506,16 @@ function buildTerrain(mb, spanX, place) {
       const y = groundHeight(x, z, place);
       // The normal comes off the height field itself, so light breaks over the
       // land the same way it breaks over a stem.
-      const e = 40;
-      const nx = groundHeight(x + e, z, place) - groundHeight(x - e, z, place);
-      const nz = groundHeight(x, z + e, place) - groundHeight(x, z - e, place);
-      const len = Math.hypot(nx, 2 * e, nz) || 1;
-      const n = [-nx / len, (2 * e) / len, -nz / len];
+      // (rounded: the normal read at the scale of the mesh itself. Read at
+      // forty units where rows lie hundreds apart, it describes ripples the
+      // mesh does not have, and each row comes out a lit step: terraces.)
+      const gap = ROUNDED ? Math.max(40, Math.abs((FAR_Z - NEAR_Z) * (2 * t * 0.86 + 0.14) / rows) * 0.6) : 40;
+      const ex = ROUNDED ? Math.max(40, width * (0.6 + Math.abs(z / FAR_Z) * 0.7) / cols * 0.6) : 40;
+      const ez = gap;
+      const nx = (groundHeight(x + ex, z, place) - groundHeight(x - ex, z, place)) / ex;
+      const nz = (groundHeight(x, z + ez, place) - groundHeight(x, z - ez, place)) / ez;
+      const len = Math.hypot(nx, 2, nz) || 1;
+      const n = [-nx / len, 2 / len, -nz / len];
 
       const patch = noise2(x * 0.00055, z * 0.00055, 44);
       const drift = noise2(x * 0.0022, z * 0.0022, 61);
@@ -1758,13 +1818,13 @@ function buildScatter(mb, place) {
       // Round or broken, according to the ground it is lying on — so an
       // outcrop of crags and a scatter of boulders are never mixed together,
       // and crossing from one stretch to the next is something you can see.
-      if (clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4) > 0.5) {
+      if (!ROUNDED && clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4) > 0.5) {
         const tall = 0.34 + rng.range(0, 0.3);
         shard(mb, x, y + w * tall * 0.7, z, w,
           (i) => rng.range(-0.55, 0.75) - (i === 3 ? 0.4 : 0)
             - (i === 2 ? 1 - tall * 2.4 : 0), [0.34, 0.32, 0.30], stone);
       } else {
-        sphere(mb, x, y + r * 0.16, z, w, 4, 6, [0.36, 0.34, 0.31], stone,
+        sphere(mb, x, y + r * 0.16, z, w, ROUNDED ? 9 : 4, ROUNDED ? 14 : 6, [0.36, 0.34, 0.31], stone,
           (px, py, pz) => (noise2(px * 0.05, pz * 0.05, 8) - 0.5) * w * 0.45
             - Math.max(0, py - y) * 0.55);
       }
@@ -2301,7 +2361,16 @@ function buildBirds(mb, place) {
   }
 }
 
-export function buildBackdrop(env, view = null, kind = 0) {
+export function buildBackdrop(env, view = null, kind = 0, opts = {}) {
+  ROUNDED = !!opts.rounded;
+  try {
+    return buildBackdropIn(env, view, kind);
+  } finally {
+    ROUNDED = false;
+  }
+}
+
+function buildBackdropIn(env, view, kind) {
   const mb = new MeshBuilder();
   const top = ENV_BY_ID[env?.id]?.sky?.[0]?.[1] || '#b6a894';
   const rgb = hexToLinear(top);

@@ -842,6 +842,7 @@ vec3 aces(vec3 x) {
 // there is least colour already, so a hazed hillside comes back and a petal
 // that is doing fine is left alone. A flat multiplier would take the picture
 // straight to poster paint, which is the other way to be wrong about this.
+uniform float uVivid;           // extra saturation after the grade (the 3D look's)
 vec3 graded(vec3 c) {
   float mx = max(c.r, max(c.g, c.b));
   float mn = min(c.r, min(c.g, c.b));
@@ -849,6 +850,8 @@ vec3 graded(vec3 c) {
   float lift = 1.0 + 0.70 * (1.0 - sat) * (1.0 - sat);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, lift);
+  // the 3D look's colour, given back once more and flatly
+  c = max(mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.0 + uVivid), 0.0);
   // and a little contrast under it: washed-out is as much a tonal fault as a
   // chromatic one, and saturation alone on a flat picture only makes it lurid.
   //
@@ -1395,6 +1398,8 @@ export function makeGlyphAtlas(gl) {
 export class Renderer3D {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
+    // the 3D look's own plant and grade (riso and clay draw on this renderer too)
+    this.real = !!opts.real;
     this.gl = createGL(canvas, opts);
     const gl = this.gl;
 
@@ -1522,7 +1527,7 @@ export class Renderer3D {
     if (this.builtKey !== key) {
       this.builtKey = key;
       disposeMesh(gl, this.plantMesh);
-      const built = buildPlant(plant, reveal);
+      const built = buildPlant(plant, reveal, { real: this.real });
       this.plantMesh = built.indices.length
         ? mesh(gl, this.sceneProg, built.data, built.indices, LAYOUT)
         : null;
@@ -1650,7 +1655,9 @@ export class Renderer3D {
       uUnderwater: PLACES[(this.worldKind ?? 0) % PLACES.length]?.underwater !== undefined
         ? 1 : 0,
       uGloom: PLACES[(this.worldKind ?? 0) % PLACES.length]?.cave ? 1 : 0,
-      uRecede: this.recedeOff ? 0 : 1,
+      // (the 3D look keeps the world at full colour: it was asked to be vivid,
+      // and the stems are the colour of a plant now, not of a material)
+      uRecede: this.recedeOff || this.real ? 0 : 1,
     });
     // The world can be left out, the way shadows can. A screen idiom takes its
     // contrast from whatever is behind it — that is how a mark stays visible on
@@ -1677,6 +1684,7 @@ export class Renderer3D {
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(this.postProg.p);
     setUniforms(gl, this.postProg, {
+      uVivid: this.real ? (globalThis.__vivid ?? 0.55) : 0,
       uScene: this.hdr.colour,
       uBackdrop: this.bg.colour,
       uDepth: this.hdr.depth,

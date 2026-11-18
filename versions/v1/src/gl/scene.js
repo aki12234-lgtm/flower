@@ -265,6 +265,44 @@ function reliefFor(materialId, salt) {
   };
 }
 
+/**
+ * A run of lattice points as a stem would grow it: the straight runs kept
+ * straight, each turn taken through an arc a couple of stem widths across, and
+ * the result laid out again at an even few units so the swelling at the nodes
+ * and the taper have points to land on. Rounding the raw points could not do
+ * this: they sit a step apart, and a corner cannot be rounder than the gap.
+ */
+function bent(pts, round) {
+  const keep = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = keep[keep.length - 1], p = pts[i], b = pts[i + 1];
+    const cross = (p.x - a.x) * (b.y - p.y) - (p.y - a.y) * (b.x - p.x);
+    if (Math.abs(cross) > 1e-6 * (1 + Math.hypot(p.x - a.x, p.y - a.y) * Math.hypot(b.x - p.x, b.y - p.y))) keep.push(p);
+  }
+  keep.push(pts[pts.length - 1]);
+  const curved = roundCorners(keep, round);
+  const out = [curved[0]];
+  const STEP = 2.5;
+  for (let i = 1; i < curved.length; i++) {
+    const a = curved[i - 1], b = curved[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / STEP));
+    for (let j = 1; j <= n; j++) {
+      const t = j / n;
+      out.push({ ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t) });
+    }
+  }
+  return out;
+}
+
+/** A living stem's surface: fine ridges along it and almost nothing else. */
+function stemRibs(salt) {
+  if (displacementOff) return null;
+  return (u, ang, p) => {
+    const n = noise2(u * 0.06 + salt, Math.cos(ang) * 2 + Math.sin(ang) * 2, 43) - 0.5;
+    return (Math.sin(ang * 7) * 0.55 + n * 0.45) * 0.07 * (p.r ?? p);
+  };
+}
+
 function stemColour(section, rng) {
   const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
   const wilt = clamp01(1 - (section.vitality ?? 1));
@@ -334,10 +372,46 @@ const rot = (v, axis, ang) => {
   ];
 };
 
+/**
+ * The 3D look's plant, grown rather than made.
+ *
+ * The answers give each section a material, and drawn as that material a stem
+ * is a velvet pipe or a rusted rod: a sculpture of a plant. The 3D look asks
+ * for the plant itself, so with `real` every stem is living tissue: green with
+ * the section's colour only as a cast in it (a red-stemmed plant is a real
+ * thing; a velvet one is not), finely ribbed and waxy rather than textured,
+ * thick at the root and fine at the tips, and bent through its corners instead
+ * of turning on them. The flowers and leaves follow, since they take their
+ * colour from the stem that bears them.
+ */
+export const REAL_STEMS = {
+  hue: 108,          // the green they are all a version of
+  spread: 14,       // how far one section's green wanders from the next
+  cast: 0.22,       // how much of the answer's own colour stays in the stem
+  sat: 46, lum: 33,
+  thin: 0.9,        // stems, overall, against the width growth gives them
+  tip: 0.55,        // and the newest growth against the oldest
+  round: 2.2,       // corner radius, in stem widths
+};
+
+function realStemColour(section, col, R) {
+  const wilt = clamp01(1 - (section.vitality ?? 1));
+  const wander = (noise2(section.step * 0.37, 1.3, 29) - 0.5) * 2 * R.spread;
+  let h = hueTowards(R.hue + wander, col.h, R.cast);
+  h = hueTowards(h, 40, wilt * 0.55);
+  return {
+    h,
+    s: clamp(R.sat * (1 - wilt * 0.45) + (noise2(section.step * 0.51, 2.1, 31) - 0.5) * 10, 18, 70),
+    l: clamp(R.lum + (noise2(section.step * 0.23, 3.7, 37) - 0.5) * 8, 20, 50),
+  };
+}
+
 /** Build the whole plant as one mesh. */
-export function buildPlant(plant, reveal = null) {
+export function buildPlant(plant, reveal = null, opts = {}) {
   const mb = new MeshBuilder();
   const flowerHue = flowerHueFor(plant);
+  const R = opts.real ? { ...REAL_STEMS, ...(globalThis.__realStems || {}) } : null;
+  const lastStep = Math.max(1, ...plant.sections.map((s) => s.step + 1));
 
   for (const section of plant.sections) {
     // the section currently growing is built only as far as it has got
@@ -345,8 +419,9 @@ export function buildPlant(plant, reveal = null) {
     const kMax = growing ? reveal.progress * section.steps : Infinity;
     if (growing && reveal.progress <= 0) continue;
     const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
-    const base3 = SURFACE[section.materialId] || SURFACE.botanical;
-    const matId = MAT_ID[section.materialId] || 1;
+    const surfId = R ? 'botanical' : section.materialId;
+    const base3 = R ? [0.34, 0.0, 0.16] : (SURFACE[surfId] || SURFACE.botanical);
+    const matId = MAT_ID[surfId] || 1;
     const surf = [base3[0], base3[1], base3[2], matId];
 
     // For a flat idiom the roughness slot carries the layer instead.
@@ -361,16 +436,25 @@ export function buildPlant(plant, reveal = null) {
       ? [clamp(z / 190 + 0.5, 0, 1), base3[1], base3[2], matId]
       : surf);
     const rng = makeRng(1013 + section.step * 7919);
-    const col = stemColour(section, rng);
+    const answered = stemColour(section, rng);
+    const col = R ? realStemColour(section, answered, R) : answered;
     const rgb = hslToRgb(col.h, col.s, col.l);
     const salt = section.step * 3.7;
-    const relief = reliefFor(section.materialId, salt);
+    const relief = R ? stemRibs(salt) : reliefFor(section.materialId, salt);
 
     // ---- stems ----
     for (const seg of section.segments) {
       const pts = growing ? seg.points.filter((p) => p.k <= kMax) : seg.points;
       if (pts.length < 2) continue;
-      const prof = stemProfile(roundCorners(pts, 0.55), 44 + (section.step % 4) * 7, 0.24);
+      // (real: thinner, tapering with age, and bent rather than cornered)
+      const run = R
+        ? pts.map((p) => {
+          const age = clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep);
+          return { ...p, w: p.w * R.thin * lerp(1, R.tip, Math.pow(age, 0.85)) };
+        })
+        : pts;
+      const prof = stemProfile(R ? bent(run, R.round) : roundCorners(run, 0.55),
+        R ? 70 + (section.step % 4) * 9 : 44 + (section.step % 4) * 7, R ? 0.12 : 0.24);
 
       // Where a branch meets its parent.
       //
@@ -426,6 +510,8 @@ export function buildPlant(plant, reveal = null) {
           const nd = nodeAt[i];
           const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;
           const k = 1 + along * 0.20 - nd * 0.14;
+          // a living node darkens a little; the red flush is the made stems'
+          if (R) return [rgb[0] * (k + nd * 0.08), rgb[1] * k, rgb[2] * k];
           return [
             Math.min(1, rgb[0] * k + nd * 0.10),   // nodes take on a red flush
             rgb[1] * k * (1 - nd * 0.16),

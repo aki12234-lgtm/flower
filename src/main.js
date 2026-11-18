@@ -723,7 +723,7 @@ async function useLook(id, first = false) {
           : kind === 'yarn' ? new m.RendererYarn(c)
             : kind === 'riso' ? new m.RendererRiso(c)
               : kind === 'clay' ? new m.RendererClay(c)
-            : new m.Renderer3D(c);
+            : new m.Renderer3D(c, { real: next.id === '3d' });
     } catch (err) {
       // a canvas that failed to give a context is no use to a second try
       if (c !== canvas) { c.remove(); delete stages[kind]; }

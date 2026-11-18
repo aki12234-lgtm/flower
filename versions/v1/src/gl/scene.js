@@ -35,6 +35,7 @@ export const MAT_ID = {
   cloud: 23, terrain: 24, scenery: 25, thicket: 26, water: 27, rock: 28,
   wing: 29, fish: 30, frond: 31,
   stem: 32,                    // the 3D look's living stem
+  petal: 33,                   // and its flowers and leaves
   // 40 and above are the flat idioms, handled as screen-space treatments. The
   // boundary was at 20 and the substances had run up against it.
   vector: 40, lineart: 41, grain: 42, ascii: 43, pixel: 44, halftone: 45,
@@ -391,7 +392,7 @@ export const REAL_STEMS = {
   spread: 6,        // how far one section's green wanders from the next
   cast: 0.22,       // how much of the answer's own colour stays in the stem
   sat: 36, lum: 34,
-  thin: 0.9,        // stems, overall, against the width growth gives them
+  thin: 0.62,       // stems, overall, against the width growth gives them
   tip: 0.55,        // and the newest growth against the oldest
   round: 2.2,       // corner radius, in stem widths
 };
@@ -451,8 +452,8 @@ export function buildPlant(plant, reveal = null, opts = {}) {
     if (growing && reveal.progress <= 0) continue;
     const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
     // (real: the flowers and leaves are plant tissue, whatever the answers)
-    const surfId = R ? 'botanical' : section.materialId;
-    const base3 = SURFACE[surfId] || SURFACE.botanical;
+    const surfId = R ? 'petal' : section.materialId;
+    const base3 = R ? [0.62, 0.0, 0.55] : (SURFACE[surfId] || SURFACE.botanical);
     const matId = MAT_ID[surfId] || 1;
     const surf = [base3[0], base3[1], base3[2], matId];
     // and the stem a stem: matte, with light coming through it

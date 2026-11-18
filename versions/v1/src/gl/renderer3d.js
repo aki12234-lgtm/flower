@@ -93,6 +93,7 @@ uniform sampler2D uShadow;
 uniform float uWorldIdiom;      // 0 = the world as it is; otherwise the manner it has taken on
 uniform float uUnderwater;      // 1 when the camera is in the sea rather than above it
 uniform float uGloom;           // 1 in a cave: no light but what falls through the break
+uniform float uFacet;           // 1: the 3D look's plant cut in facets, like the world it stands in
 uniform float uRecede;          // 1 to hold the world back behind the plant; 0 to see it raw
 out vec4 outColour;
 
@@ -220,6 +221,7 @@ float surfaceHeight(int id, vec2 uvRaw) {
  * mean what it says.
  */
 float featureFreq(int id) {
+  if (id == 33) return 0.6;                        // petal
   if (id == 32) return 1.0;                        // living stem
   if (id == 4) return 1.5;                         // wool
   if (id == 15) return 1.7;                        // charcoal
@@ -254,6 +256,7 @@ float featureFreq(int id) {
 }
 
 float bumpStrength(int id) {
+  if (id == 33) return 0.10;                       // petal
   if (id == 32) return 0.32;                       // living stem
   if (id == 4) return 1.75;                        // wool
   if (id == 6) return 1.55;                        // embroidery
@@ -296,6 +299,7 @@ float bumpStrength(int id) {
  * on it; pigment variation is what makes it a substance.
  */
 float albedoVar(int id) {
+  if (id == 33) return 0.08;                       // petal
   if (id == 32) return 0.16;                       // living stem
   if (id == 11) return 0.78;                       // mould, blotchy
   if (id == 15) return 0.70;                       // charcoal
@@ -408,6 +412,7 @@ vec3 patternTint(int id, vec2 uvRaw, float h) {
 }
 
 float sheenStrength(int id) {
+  if (id == 33) return 0.12;                       // petal
   if (id == 32) return 0.42;                       // living stem: the down on it
   if (id == 4) return 1.15;                        // wool
   if (id == 6) return 0.85;                        // embroidery
@@ -590,6 +595,12 @@ void main() {
   vec3 T = abs(det) > 1e-8 ? normalize((dpx * duy.y - dpy * dux.y) / det) : normalize(dpx);
   vec3 Bt = normalize(cross(N, T));
   N = normalize(N - (T * (hx - h0) + Bt * (hy - h0)) * bumpStrength(matId) * 1.45 * uRelief);
+  // The world is cut in facets, and a plant smooth to the last polygon in it
+  // reads as pasted in from somewhere else. Cut it the same way.
+  if (uFacet > 0.5 && (matId == 32 || matId == 33)) {
+    N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    if (dot(N, V) < 0.0) N = -N;
+  }
 
   vec3 L = normalize(uLightDir);
   vec3 H = normalize(L + V);
@@ -721,6 +732,14 @@ void main() {
     direct += albedo * uSunColour * rim * sheenAmt * (0.35 + ndl * 0.65) * shadow;
   }
 
+  // A petal or a thin stem is lit through: the side away from the sun is not
+  // in shade but glowing, deeper in colour, which is what separates tissue
+  // from painted card.
+  if (matId == 33 || matId == 32) {
+    float thru = max(dot(normalize(vNormal) * sign(dot(normalize(vNormal), V)), -L), 0.0);
+    vec3 deep = albedo * albedo * 1.6;
+    direct += deep * uSunColour * (0.25 + thru * 0.75) * (matId == 33 ? 0.30 : 0.12) * mix(0.6, 1.0, shadow);
+  }
   // light coming through a leaf or a petal from behind
   float back = pow(max(dot(V, -L), 0.0), 2.0) * trans;
   direct += albedo * uSunColour * back * 0.55 * shadow;
@@ -1653,6 +1672,7 @@ export class Renderer3D {
     const ground = dim(env.dark ? [0.025, 0.025, 0.032] : [0.11, 0.095, 0.075], 0.80,
       [0.012, 0.013, 0.022]);
     setUniforms(gl, this.sceneProg, {
+      uFacet: this.real && (globalThis.__facet ?? 0) ? 1 : 0,
       uViewProj: viewProj,
       uLightViewProj: lightViewProj,
       uLightDir: LIGHT_DIR,

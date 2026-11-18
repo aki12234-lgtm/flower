@@ -34,6 +34,7 @@ export const MAT_ID = {
   // ground are lit and surfaced by the same system as everything else.
   cloud: 23, terrain: 24, scenery: 25, thicket: 26, water: 27, rock: 28,
   wing: 29, fish: 30, frond: 31,
+  stem: 32,                    // the 3D look's living stem
   // 40 and above are the flat idioms, handled as screen-space treatments. The
   // boundary was at 20 and the substances had run up against it.
   vector: 40, lineart: 41, grain: 42, ascii: 43, pixel: 44, halftone: 45,
@@ -385,16 +386,46 @@ const rot = (v, axis, ang) => {
  * colour from the stem that bears them.
  */
 export const REAL_STEMS = {
-  hue: 108,          // the green they are all a version of
-  spread: 14,       // how far one section's green wanders from the next
+  kind: 'herb',
+  hue: 112,          // the green they are all a version of
+  spread: 6,        // how far one section's green wanders from the next
   cast: 0.22,       // how much of the answer's own colour stays in the stem
-  sat: 46, lum: 33,
+  sat: 36, lum: 34,
   thin: 0.9,        // stems, overall, against the width growth gives them
   tip: 0.55,        // and the newest growth against the oldest
   round: 2.2,       // corner radius, in stem widths
 };
 
+/**
+ * The colour of a stem at one point, by how old the growth there is (0 the
+ * root, 1 the newest tip). New growth is paler and yellower and the old is
+ * darker and duller everywhere; what the old turns into is the kind's.
+ */
+const STEM_KINDS = {
+  herb: { tip: [-9, 1.05, 1.16], base: [2, 0.82, 0.80] },
+  woody: { tip: [-9, 1.05, 1.15], base: [0, 1, 1], bark: [26, 20, 24], barkTo: 0.5 },
+  glaucous: { tip: [-10, 1.0, 1.08], base: [0, 0.9, 0.92] },
+};
+function alongStem(col, age, R) {
+  const K = STEM_KINDS[R.kind] || STEM_KINDS.herb;
+  const t = smooth01(age);
+  const end = (e) => ({ h: col.h + e[0], s: col.s * e[1], l: col.l * e[2] });
+  const a = end(K.base), b = end(K.tip);
+  let h = lerp(a.h, b.h, t), sat = lerp(a.s, b.s, t), l = lerp(a.l, b.l, t);
+  if (K.bark) {
+    const w = 1 - smooth01(clamp01(age / K.barkTo));
+    h = hueTowards(h, K.bark[0], w); sat = lerp(sat, K.bark[1], w); l = lerp(l, K.bark[2], w);
+  }
+  return hslToRgb(h, clamp(sat, 0, 100), clamp(l, 0, 100));
+}
+const smooth01 = (t) => t * t * (3 - 2 * t);
+
 function realStemColour(section, col, R) {
+  if (R.kind === 'glaucous') {
+    // the waxy bloom over it: blue-grey before it is green
+    const g = { ...R, hue: 165, sat: 13, lum: 52, cast: R.cast * 0.4 };
+    R = g;
+  }
   const wilt = clamp01(1 - (section.vitality ?? 1));
   const wander = (noise2(section.step * 0.37, 1.3, 29) - 0.5) * 2 * R.spread;
   let h = hueTowards(R.hue + wander, col.h, R.cast);
@@ -419,10 +450,13 @@ export function buildPlant(plant, reveal = null, opts = {}) {
     const kMax = growing ? reveal.progress * section.steps : Infinity;
     if (growing && reveal.progress <= 0) continue;
     const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
+    // (real: the flowers and leaves are plant tissue, whatever the answers)
     const surfId = R ? 'botanical' : section.materialId;
-    const base3 = R ? [0.34, 0.0, 0.16] : (SURFACE[surfId] || SURFACE.botanical);
+    const base3 = SURFACE[surfId] || SURFACE.botanical;
     const matId = MAT_ID[surfId] || 1;
     const surf = [base3[0], base3[1], base3[2], matId];
+    // and the stem a stem: matte, with light coming through it
+    const stemSurf = R && [0.72, 0.0, 0.26, MAT_ID.stem];
 
     // For a flat idiom the roughness slot carries the layer instead.
     //
@@ -497,7 +531,7 @@ export function buildPlant(plant, reveal = null, opts = {}) {
         };
       });
       // more sides, because a displaced outline needs somewhere to be displaced
-      const segSurf = layered(segZ);
+      const segSurf = stemSurf || layered(segZ);
       // Colour that moves along the member.
       //
       // One flat green from base to tip is the thing that made a stem read as
@@ -505,13 +539,18 @@ export function buildPlant(plant, reveal = null, opts = {}) {
       // duller, newer growth brighter — and it warms towards red at every node,
       // which is where the pigment gathers and the commonest tell that a thing
       // is grown rather than moulded.
+      const ages = R && prof.points.map((p) =>
+        clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep));
       tube(mb, path, 18,
         (i, p) => {
           const nd = nodeAt[i];
           const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;
           const k = 1 + along * 0.20 - nd * 0.14;
           // a living node darkens a little; the red flush is the made stems'
-          if (R) return [rgb[0] * (k + nd * 0.08), rgb[1] * k, rgb[2] * k];
+          if (R) {
+            const c = alongStem(col, ages[i], R);
+            return c.map((v) => Math.min(1, v * (k - nd * 0.04)));
+          }
           return [
             Math.min(1, rgb[0] * k + nd * 0.10),   // nodes take on a red flush
             rgb[1] * k * (1 - nd * 0.16),
@@ -529,7 +568,8 @@ export function buildPlant(plant, reveal = null, opts = {}) {
       // touch larger so nothing of the crease underneath shows past it.
       // Whatever shading a joint deserves, the light gives it.
       if (isBranch) {
-        sphere(mb, p0.x, p0.y, segZ, path[0].r * 1.06, 9, 12, rgb, segSurf, relief);
+        sphere(mb, p0.x, p0.y, segZ, path[0].r * 1.06, 9, 12,
+          R ? alongStem(col, ages[0], R) : rgb, segSurf, relief);
       }
 
       // Round both stem ends. A tube caps only its far end, so every segment
@@ -537,8 +577,9 @@ export function buildPlant(plant, reveal = null, opts = {}) {
       // stem genuinely stops the far cap faces the camera as a cut pipe. Where
       // one section runs into the next the rounding is buried inside the
       // following segment and costs nothing, so it needs no special case.
-      for (const e of [path[0], path[path.length - 1]]) {
-        sphere(mb, e.x, e.y, e.z, e.r * 1.0, 8, 10, rgb, segSurf, relief);
+      for (const [e, j] of [[path[0], 0], [path[path.length - 1], path.length - 1]]) {
+        sphere(mb, e.x, e.y, e.z, e.r * 1.0, 8, 10,
+          R ? alongStem(col, ages[j], R) : rgb, segSurf, relief);
       }
     }
 

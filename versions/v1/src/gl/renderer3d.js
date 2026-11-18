@@ -139,6 +139,9 @@ float fbm(vec2 p) {
 
 float surfaceHeight(int id, vec2 uvRaw) {
   vec2 uv = uvRaw * 0.19;
+  if (id == 32) {                                  // living stem: ridged along its length
+    return 0.42 + (smoothstep(0.62, 0.98, 0.5 + 0.5 * sin(uv.y * 11.0 + fbm(vec2(uv.x * 0.22, uv.y * 0.6)) * 3.2)) * (0.55 + 0.45 * fbm(vec2(uv.x * 0.12, uv.y * 1.3)))) * 0.38 + fbm(vec2(uv.x * 0.08, uv.y * 3.0)) * 0.30;
+  }
   if (id == 1) {                                   // botanical: fibres along the stem
     return fbm(vec2(uv.x * 0.10, uv.y * 2.6)) * 0.55
          + fbm(uv * 0.06) * 0.45;
@@ -217,6 +220,7 @@ float surfaceHeight(int id, vec2 uvRaw) {
  * mean what it says.
  */
 float featureFreq(int id) {
+  if (id == 32) return 1.0;                        // living stem
   if (id == 4) return 1.5;                         // wool
   if (id == 15) return 1.7;                        // charcoal
   if (id == 7) return 1.1;                         // paper
@@ -250,6 +254,7 @@ float featureFreq(int id) {
 }
 
 float bumpStrength(int id) {
+  if (id == 32) return 0.32;                       // living stem
   if (id == 4) return 1.75;                        // wool
   if (id == 6) return 1.55;                        // embroidery
   if (id == 11) return 1.45;                       // mould
@@ -291,6 +296,7 @@ float bumpStrength(int id) {
  * on it; pigment variation is what makes it a substance.
  */
 float albedoVar(int id) {
+  if (id == 32) return 0.16;                       // living stem
   if (id == 11) return 0.78;                       // mould, blotchy
   if (id == 15) return 0.70;                       // charcoal
   if (id == 14) return 0.62;                       // watercolour, pooling
@@ -326,6 +332,14 @@ float albedoVar(int id) {
  */
 vec3 patternTint(int id, vec2 uvRaw, float h) {
   vec2 uv = uvRaw * 0.19;
+  if (id == 32) {                                  // living stem
+    // The pale lines down a stem are the bundles that carry its water, and
+    // they are most of what tells the eye this is grown: a plain tube of
+    // green, however it is lit, is a moulded thing.
+    float st = (smoothstep(0.62, 0.98, 0.5 + 0.5 * sin(uv.y * 11.0 + fbm(vec2(uv.x * 0.22, uv.y * 0.6)) * 3.2)) * (0.55 + 0.45 * fbm(vec2(uv.x * 0.12, uv.y * 1.3))));
+    float drift = fbm(vec2(uv.x * 0.05, uv.y * 0.4));
+    return mix(vec3(0.92), vec3(1.12, 1.14, 0.94), st) * (0.93 + drift * 0.15);
+  }
 
   if (id == 17) {                                  // rust
     // oxide in patches, bare metal showing through where it has not taken
@@ -394,6 +408,7 @@ vec3 patternTint(int id, vec2 uvRaw, float h) {
 }
 
 float sheenStrength(int id) {
+  if (id == 32) return 0.42;                       // living stem: the down on it
   if (id == 4) return 1.15;                        // wool
   if (id == 6) return 0.85;                        // embroidery
   if (id == 5) return 0.70;                        // thread

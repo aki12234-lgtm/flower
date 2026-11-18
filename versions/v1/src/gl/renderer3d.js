@@ -1674,7 +1674,7 @@ export class Renderer3D {
     const ground = dim(env.dark ? [0.025, 0.025, 0.032] : [0.11, 0.095, 0.075], 0.80,
       [0.012, 0.013, 0.022]);
     setUniforms(gl, this.sceneProg, {
-      uFacet: this.real ? (globalThis.__facet ?? 2) : 0,
+      uFacet: this.real ? (globalThis.__facet ?? 0) : 0,
       uViewProj: viewProj,
       uLightViewProj: lightViewProj,
       uLightDir: LIGHT_DIR,

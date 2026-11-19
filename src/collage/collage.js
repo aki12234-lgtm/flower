@@ -26,6 +26,7 @@ uniform sampler2D uWorld;
 uniform sampler2D uPlant;
 uniform vec2 uRes;      // device pixels
 uniform float uPx;      // device pixels to a CSS pixel
+uniform vec2 uAnchor;   // where the world's origin is on screen, CSS px: the paper is fixed to it
 out vec4 outColour;
 
 float hash21(vec2 p) {
@@ -84,137 +85,177 @@ float keyOf(vec3 c) {
 
 /** Torn: where a point is taken to lie, for deciding which piece it is on. */
 vec2 torn(vec2 p) {
-  vec2 big = vec2(fbm(p * 0.035 + 3.0), fbm(p * 0.035 + 17.0)) - 0.5;
-  vec2 fine = vec2(vnoise(p * 0.6 + 5.0), vnoise(p * 0.6 + 29.0)) - 0.5;
-  return p + big * 7.0 + fine * 1.6;
+  vec2 a = p - uAnchor;
+  vec2 big = vec2(fbm(a * 0.03 + 3.0), fbm(a * 0.03 + 17.0)) - 0.5;
+  vec2 fine = vec2(vnoise(a * 0.5 + 5.0), vnoise(a * 0.5 + 29.0)) - 0.5;
+  return p + big * 8.0 + fine * 1.8;
 }
 /** Cut: scissors wander too, but slowly. */
 vec2 cut(vec2 p) {
-  return p + (vec2(vnoise(p * 0.05 + 11.0), vnoise(p * 0.05 + 37.0)) - 0.5) * 2.2;
+  vec2 a = p - uAnchor;
+  return p + (vec2(vnoise(a * 0.05 + 11.0), vnoise(a * 0.05 + 37.0)) - 0.5) * 2.2;
 }
 
-/** Paper of a colour: never quite the ink, a little chalky and a little warm. */
-vec3 paper(vec3 c) {
+/**
+ * Paper of a colour. Not the ink: coloured paper is dyed, and dye on fibre is
+ * never as clean as light on a screen. Less chroma, a warm cast, no true white
+ * and no true black, and every sheet a little off its neighbour, as two packs
+ * of the same colour bought a year apart are.
+ */
+vec3 paper(vec3 c, float key, float strong) {
   float l = dot(c, vec3(0.299, 0.587, 0.114));
-  c = mix(vec3(l), c, 0.92);
-  return clamp(mix(c, vec3(0.95, 0.92, 0.86), 0.12), 0.0, 1.0);
+  c = mix(vec3(l), c, mix(0.86, 0.96, strong));
+  c *= vec3(1.0, 0.972, 0.915);
+  c = mix(vec3(0.115, 0.10, 0.10), vec3(0.955, 0.93, 0.875), c);
+  float lot = hash21(vec2(key, 41.0)) - 0.5;
+  return clamp(c * (1.0 + lot * 0.07), 0.0, 1.0);
+}
+
+/** The fibre and the flecks every sheet has, printed or not. */
+float grain(vec2 a, float key) {
+  float fib = fbm(a * vec2(0.9, 0.45) + key * 3.1) - 0.5;
+  float fleck = smoothstep(0.86, 0.95, hash21(floor(a * 0.9) + key));
+  return 1.0 + fib * 0.07 - fleck * 0.06;
 }
 
 /** What each paper was before it was cut up. */
-vec3 printOn(vec3 base, vec2 p, float key, float bias) {
+vec3 printOn(vec3 base, vec2 a, float key, float bias) {
   float t = fract(hash21(vec2(key, 7.0)) + bias);
   float ang = hash21(vec2(key, 13.0)) * 3.1416;
   float s = sin(ang), c = cos(ang);
-  vec2 q = vec2(c * p.x - s * p.y, s * p.x + c * p.y);
-  vec3 ink = base * vec3(0.66, 0.64, 0.70);
-  if (t < 0.3) {
-    // a magazine page: the colour is a halftone, and you can see the dots
-    float pitch = 2.8 + hash21(vec2(key, 3.0)) * 1.0;
+  vec2 q = vec2(c * a.x - s * a.y, s * a.x + c * a.y) + hash21(vec2(key, 5.0)) * 300.0;
+  vec3 ink = base * vec3(0.70, 0.68, 0.74);
+  vec3 col;
+  if (t < 0.24) {
+    // a magazine page: the colour is a halftone, and close to you see the dots
+    float pitch = 3.6 + hash21(vec2(key, 3.0)) * 2.2;
     vec2 g = fract(q / pitch) - 0.5;
-    float d = smoothstep(0.36, 0.26, length(g));
-    return mix(base * 1.07, ink, d * 0.42);
-  } else if (t < 0.48) {
+    float d = smoothstep(0.38, 0.27, length(g) + (vnoise(q * 0.7) - 0.5) * 0.08);
+    col = mix(base * 1.05, ink, d * 0.30);
+  } else if (t < 0.40) {
     // a page of type, too small to read, which is what it is from here
-    float lh = 4.6;
+    float lh = 4.8;
     float row = floor(q.y / lh);
     float f = fract(q.y / lh);
-    float inRow = smoothstep(0.08, 0.3, f) * smoothstep(0.78, 0.56, f);
-    float word = step(0.3, vnoise(vec2(q.x * 0.28, row * 3.7 + key)));
-    float glyph = step(0.3, hash21(floor(vec2(q.x / 1.4, row)) + key));
-    float margin = step(0.12, vnoise(vec2(row * 0.7, key)));
-    return mix(base * 1.05, ink * 0.85, inRow * word * glyph * margin * 0.5);
-  } else if (t < 0.8) {
-    // sugar paper: no print, only the fibre and a little mottle
-    float f = fbm(q * vec2(0.8, 0.1) + key) - 0.5;
-    float m = fbm(q * 0.04 + key) - 0.5;
-    return base * (1.0 + f * 0.10 + m * 0.10);
+    float inRow = smoothstep(0.1, 0.3, f) * smoothstep(0.76, 0.56, f);
+    float word = step(0.32, vnoise(vec2(q.x * 0.26, row * 3.7 + key)));
+    float glyph = step(0.28, hash21(floor(vec2(q.x / 1.5, row)) + key));
+    float para = step(0.1, vnoise(vec2(row * 0.6, key)));
+    col = mix(base * 1.04, ink * 0.8, inRow * word * glyph * para * 0.42);
+  } else if (t < 0.78) {
+    // sugar paper: no print, only its own coarse fibre and a mottle in the dye
+    float m = fbm(q * 0.025 + key) - 0.5;
+    float f = fbm(q * vec2(0.35, 0.18) + key) - 0.5;
+    col = base * (1.0 + m * 0.10 + f * 0.08);
   } else {
     // a photograph, out of focus: blotches of its own darker and lighter
-    float b = fbm(q * 0.03 + key) - 0.5;
-    return base * (1.0 + b * 0.34);
+    float b = fbm(q * 0.022 + key) - 0.5;
+    col = base * (1.0 + b * 0.30) + vec3(0.02);
   }
+  return col * grain(q, key);
 }
+
+const vec3 BOARD = vec3(0.90, 0.865, 0.79);   // what it is all stuck down on
+const vec3 CORE = vec3(0.975, 0.962, 0.93);   // the inside of a sheet, where it tears
 
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uPx;
+  vec2 a = p - uAnchor;                         // fixed to the world, not the glass
 
   // ---- the world: torn pieces ----
-  vec2 tp = torn(p);
-  vec3 wc = worldAt(tp);
+  vec3 wc = worldAt(torn(p));
   float wk = keyOf(wc);
-  // Which sheet is on top along a tear: the nearer, which is the lower one on
-  // screen. So a change of piece just above here means this is the upper sheet
-  // and the tear is along its top: its white core shows. A change just below
-  // means this is the under sheet, in the shadow of the one over it.
-  float rim = 0.0, under = 0.0;
-  float rw = 1.0 + 1.6 * vnoise(p * 0.18);
-  for (int i = 0; i < 5; i++) {
-    float a = 3.1416 + float(i) * 0.7854;          // from left, over the top, to right
-    vec2 d = vec2(cos(a), sin(a));                  // (y down: sin < 0 is up)
-    if (keyOf(worldAt(torn(p + d * rw))) != wk) rim = 1.0;
-    for (int k = 1; k <= 3; k++) {
-      vec2 e = vec2(-d.x, -d.y) * float(k) * 1.6;   // the mirror: below
-      if (keyOf(worldAt(torn(p + e))) != wk) under = max(under, 1.0 - float(k - 1) / 3.0);
+  vec3 base = paper(wc, wk, 0.0);
+
+  // How far the nearest tear is above this point, and below it, and what is on
+  // the other side. The nearer sheet is the lower one on screen, and lies on
+  // top: a tear above means this is the upper sheet, showing its white core
+  // along it; a tear below means this is under, in the other one's shadow.
+  float up = 99.0, down = 99.0;
+  vec3 upC = wc, downC = wc;
+  for (int r = 1; r <= 7; r++) {
+    float fr = float(r);
+    for (int i = -1; i <= 1; i++) {
+      vec2 d = normalize(vec2(float(i) * 0.8, 1.0));
+      if (up > 98.0) {
+        vec3 c = worldAt(torn(p - d * fr));
+        if (keyOf(c) != wk) { up = fr; upC = c; }
+      }
+      if (down > 98.0) {
+        vec3 c = worldAt(torn(p + d * fr));
+        if (keyOf(c) != wk) { down = fr; downC = c; }
+      }
     }
   }
-  // a scrap too small to tear (a flower, a tuft) keeps a clean edge
-  // (the rim is along a piece's top, so what it needs is paper below it)
-  float body = 1.0;
-  for (int k = 1; k <= 3; k++) {
-    if (keyOf(worldAt(tp + vec2(0.0, 3.5 * float(k)))) != wk) body = 0.0;
-  }
-  rim *= body;
-  vec3 col = printOn(paper(wc), p, wk, 0.0);
-  col *= 0.96 + hash21(vec2(wk, 41.0)) * 0.08;
-  col *= 1.0 - under * 0.16;
-  vec3 core = vec3(0.975, 0.96, 0.925) * (0.92 + 0.08 * vnoise(p * 1.9));
-  float fray = smoothstep(0.3, 0.62, vnoise(p * vec2(0.9, 0.4) + 4.0));
-  col = mix(col, core, rim * mix(0.55, 1.0, fray));
+  // two sheets of nearly the same colour do not read as a tear, only as a seam
+  float upK = smoothstep(0.035, 0.11, distance(base, paper(upC, keyOf(upC), 0.0)));
+  float downK = smoothstep(0.035, 0.11, distance(base, paper(downC, keyOf(downC), 0.0)));
+
+  vec3 col = printOn(base, a, wk, 0.0);
+
+  // under: the shadow of the sheet over it, soft, and a sliver of the board
+  // where the two did not quite meet
+  float sh = pow(1.0 - smoothstep(0.0, 7.0, down), 1.5) * downK;
+  col *= 1.0 - sh * 0.34;
+  float gap = step(down, 1.6) * smoothstep(0.62, 0.78, vnoise(a * vec2(0.08, 0.5) + 9.0)) * downK;
+  col = mix(col, BOARD * grain(a, 3.0) * 0.92, gap);
+
+  // upper: the tear. Wide where the paper split badly, a hairline where it went
+  // clean, and its outer edge is fibre, not a line
+  float w = (0.8 + 3.6 * pow(fbm(a * 0.045 + 21.0), 1.6)) * upK;
+  float edge = 1.0 - smoothstep(w - 0.6, w + 0.4, up - 0.5 + (vnoise(a * 1.4) - 0.5) * 1.2);
+  vec3 core = CORE * (0.94 + 0.06 * vnoise(a * vec2(1.8, 0.6)));
+  col = mix(col, core, edge);
 
   // ---- the plant: cut out and stuck on top ----
   vec2 cp = cut(p);
   vec4 pc = plantAt(cp);
-  // cut a little wide, as scissors round a small shape always are: a margin of
-  // the white sheet it was cut from goes round it
+  // cut wide, as scissors round a small shape always are: a margin of the
+  // white sheet it was cut from goes round it, never quite the same width
+  float mw = 2.6 + 1.6 * vnoise(a * 0.06 + 2.0);
   float margin = 0.0;
   if (pc.a < 0.5) {
-    for (int i = 0; i < 8; i++) {
-      float a = float(i) * 0.7854;
-      if (plantAt(cp + vec2(cos(a), sin(a)) * 2.4).a > 0.5) margin = 1.0;
+    for (int i = 0; i < 12; i++) {
+      float b = float(i) * 0.5236;
+      for (int r = 1; r <= 2; r++) {
+        if (plantAt(cp + vec2(cos(b), sin(b)) * mw * float(r) * 0.5).a > 0.5) margin = 1.0;
+      }
     }
   }
-  // its shadow on the page: it stands a little proud, lit from the upper left
-  float sh = 0.0;
-  for (int i = 0; i < 6; i++) {
-    float a = float(i) * 1.0472;
-    vec2 o = vec2(-2.6, -3.2) + vec2(cos(a), sin(a)) * 1.8;
-    vec2 q = cut(p + o);
+  // its shadow on the page: stuck on with a pad of glue, so it stands a little
+  // proud, and the window is up and to the left
+  float ps = 0.0;
+  for (int i = 0; i < 8; i++) {
+    float b = float(i) * 0.7854;
+    vec2 q = cut(p + vec2(-3.0, -4.0) + vec2(cos(b), sin(b)) * 2.6);
     float m = plantAt(q).a;
     for (int j = 0; j < 4 && m < 0.5; j++) {
-      float b = float(j) * 1.5708 + 0.4;
-      m = max(m, plantAt(q + vec2(cos(b), sin(b)) * 2.4).a);
+      float c = float(j) * 1.5708 + 0.4;
+      m = max(m, plantAt(q + vec2(cos(c), sin(c)) * mw).a);
     }
-    sh += m;
+    ps += m;
   }
-  col *= 1.0 - (sh / 6.0) * 0.30 * (1.0 - max(pc.a, margin));
-  col = mix(col, vec3(0.975, 0.965, 0.94) * (0.95 + 0.05 * vnoise(p * 1.3)), margin);
+  col *= 1.0 - (ps / 8.0) * 0.34 * (1.0 - max(pc.a, margin));
+  col = mix(col, CORE * grain(a, 17.0), margin);
   if (pc.a > 0.5) {
     float pk = keyOf(pc.rgb);
-    vec3 pcol = printOn(paper(pc.rgb), p, pk, 0.37);
-    pcol *= 0.97 + hash21(vec2(pk, 59.0)) * 0.06;
+    vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), a, pk, 0.37);
     // where one cut piece lies on another, a hairline of shadow under the edge
-    float edge = 0.0;
+    float e = 0.0;
     for (int i = 0; i < 4; i++) {
-      float a = float(i) * 1.5708 + 0.785;
-      vec4 q = plantAt(cut(p + vec2(cos(a), sin(a)) * 1.4));
-      if (q.a > 0.5 && keyOf(q.rgb) != pk) edge = 1.0;
+      float b = float(i) * 1.5708 + 0.785;
+      vec4 q = plantAt(cut(p + vec2(cos(b), sin(b)) * 1.5));
+      if (q.a > 0.5 && keyOf(q.rgb) != pk) e = 1.0;
     }
-    pcol *= 1.0 - edge * 0.14;
-    col = pcol;
+    col = pcol * (1.0 - e * 0.16);
   }
 
-  // the sheet it is all stuck down on has a grain, and the glue cockles it
-  col *= 0.975 + 0.04 * vnoise(p * 0.7) + 0.03 * (fbm(p * 0.008) - 0.5);
+  // The whole thing photographed: the glue cockles the board, and the light
+  // from the window falls off across it.
+  vec2 uv = p * uPx / uRes;
+  col *= 0.985 + 0.03 * (fbm(a * 0.006) - 0.5);
+  col *= 1.03 - 0.06 * uv.x * 0.5 - 0.05 * uv.y;
+  col *= 1.0 - 0.16 * pow(clamp(length(uv - 0.5) * 1.25, 0.0, 1.0), 2.6);
   outColour = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;
 
@@ -252,6 +293,8 @@ class Sketch extends Renderer2D {
     this.ensureWorld();
     this.ensurePlant(plant, reveal);
     const v = this.view(cam, time);
+    const s0 = v.s(0);
+    this.anchor = [v.X(0, s0), v.Y(0, s0)];
     const moving = this.moving.at(time * 0.001, plant, v);
     const ctx = this.ctx;
     // the world, everything in it, in its order: the plant is not in this sheet
@@ -351,6 +394,8 @@ export class RendererCollage {
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uPlant'), 1);
     gl.uniform2f(gl.getUniformLocation(this.prog, 'uRes'), this.pw, this.ph);
     gl.uniform1f(gl.getUniformLocation(this.prog, 'uPx'), this.dpr);
+    const an = this.sketch.anchor || [0, 0];
+    gl.uniform2f(gl.getUniformLocation(this.prog, 'uAnchor'), an[0], an[1]);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     const a = gl.getAttribLocation(this.prog, 'aPos');
     gl.enableVertexAttribArray(a);

@@ -25,6 +25,7 @@ const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uWorld;
 uniform sampler2D uPlant;
+uniform sampler2D uFar;    // where the far range shows: that layer is cut from the newspaper
 uniform vec2 uRes;      // device pixels
 uniform float uPx;      // device pixels to a CSS pixel
 uniform vec2 uAnchor;   // where the world's origin is on screen, CSS px: the paper is fixed to it
@@ -248,6 +249,15 @@ void main() {
   float sat = (max(wc.r, max(wc.g, wc.b)) - min(wc.r, min(wc.g, wc.b))) / max(1e-3, max(wc.r, max(wc.g, wc.b)));
   float big = step(0.32, sat);
   vec3 col = printOn(base, a, wk, 0.0, big);
+  // The far range is always the newspaper, whatever its colour: one layer of
+  // every place cut from the same paper, which is how a collage is planned
+  // rather than chanced. A little more of its colour is left in, so its lit
+  // and shaded faces still read.
+  if (texture(uFar, uvAt(warp(p))).a > 0.5) {
+    vec2 q = rot(a, (hash21(vec2(wk, 13.0)) - 0.5) * 0.5) + hash21(vec2(wk, 5.0)) * 900.0;
+    vec3 page = mix(NEWS, base, 0.34) * grain(q, wk);
+    col = mix(page, NEWS_INK, newsprint(q, wk) * 0.6);
+  }
 
   // Under another sheet: a tight contact shadow right at its edge and a soft
   // one spreading from it. This, not a line, is what an edge of paper is.
@@ -361,6 +371,23 @@ class Sketch extends Renderer2D {
       if (!it.sky) it.draw(ctx, v);
     }
     while (m < moving.length) moving[m++].draw(ctx, v);
+    // where the far range is still to be seen: drawn in order, every range
+    // laid down and everything else rubbing out what it covers
+    if (!this.farSheet || this.farSheet.width !== this.pw || this.farSheet.height !== this.ph) {
+      this.farSheet = canvasOf(this.pw, this.ph);
+    }
+    const fc = this.farSheet.getContext('2d');
+    fc.setTransform(1, 0, 0, 1, 0, 0);
+    fc.globalCompositeOperation = 'source-over';
+    fc.clearRect(0, 0, this.pw, this.ph);
+    for (const it of items) {
+      if (it.sky) continue;
+      fc.globalCompositeOperation = it.kind === 'range' ? 'source-over' : 'destination-out';
+      it.draw(fc, v);
+    }
+    fc.globalCompositeOperation = 'destination-out';
+    for (const mv of moving) mv.draw(fc, v);
+    fc.globalCompositeOperation = 'source-over';
     // and the plant on its own
     if (!this.plantSheet || this.plantSheet.width !== this.pw || this.plantSheet.height !== this.ph) {
       this.plantSheet = canvasOf(this.pw, this.ph);
@@ -402,6 +429,7 @@ export class RendererCollage {
     };
     this.texWorld = tex();
     this.texPlant = tex();
+    this.texFar = tex();
     this.resize();
   }
 
@@ -444,7 +472,11 @@ export class RendererCollage {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.texPlant);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.plantSheet);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.texFar);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.farSheet);
     gl.useProgram(this.prog);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uFar'), 2);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uWorld'), 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uPlant'), 1);
     gl.uniform2f(gl.getUniformLocation(this.prog, 'uRes'), this.pw, this.ph);

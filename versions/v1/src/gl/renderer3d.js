@@ -52,14 +52,14 @@ vec3 stirred(vec3 p, vec2 uv, int id) {
     p.x += sin(uSceneTime * 0.019 + p.z * 0.00004) * 900.0;
     p.y += sin(uSceneTime * 0.031 + p.x * 0.00006) * 90.0;
   } else if (id == 29) {                           // birds: flying, and flapping
-    float ph = wob(floor(p.xz * 0.0012)) * 6.2832;
+    float ph = uv.y * 6.2832;                      // one per flock, stamped on it
     p.x += sin(uSceneTime * 0.17 + ph) * 1500.0;
     p.z += cos(uSceneTime * 0.17 + ph) * 1500.0;
     p.y += sin(uSceneTime * 0.4 + ph) * 90.0;
     // uv.x runs out along the wing from the body, so the tip travels furthest
     p.y += sin(uSceneTime * 6.5 + ph) * uv.x * 0.5;
   } else if (id == 30) {                           // fish, holding station
-    float ph = wob(floor(p.xz * 0.004)) * 6.2832;
+    float ph = uv.y * 6.2832;                      // one per school
     p.x += sin(uSceneTime * 0.5 + ph) * 90.0;
     p.z += cos(uSceneTime * 0.37 + ph) * 90.0;
     p.y += sin(uSceneTime * 0.8 + ph) * 14.0;

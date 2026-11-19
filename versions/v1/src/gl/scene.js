@@ -9,7 +9,7 @@
 import { makeRng, clamp, clamp01, lerp, noise2 } from '../rng.js';
 import { MATERIAL_BY_ID, MATERIALS, nodeOutlines, stemProfile, roundCorners } from '../materials.js';
 import { ENV_BY_ID, ENVIRONMENTS } from '../environment.js';
-import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt, setDetail } from './meshes.js';
+import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt, setDetail, setRound, sphereAt } from './meshes.js';
 
 const cross3 = (a, b) => {
   const c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -1426,6 +1426,11 @@ const placeAt = (kind) => PLACES[((kind % PLACES.length) + PLACES.length) % PLAC
  * not belong to. Set for the length of one backdrop build.
  */
 let ROUNDED = false;
+// Rock and fungus, rounded: their displacement reaches them as a position, and
+// what roughens them bends instead of creasing. Otherwise left exactly as the
+// other looks have always had them.
+const ballAt = (...a) => (ROUNDED ? sphereAt : sphere)(...a);
+const roughN = (x, z, f) => (ROUNDED ? smoothNoise : noise2)(x, z, f);
 
 /**
  * Rounded ground is the same land drawn from noise that eases between its
@@ -1467,7 +1472,10 @@ function groundHeightRaw(x, z, place) {
   h += mixed(77, 0.0011, b);
   if (!ROUNDED) h += mixed(13, 0.0044, c);
   if (place.dunes) {                        // long, and one-sided
-    h += Math.sin(x * 0.0008 + noise2(z * 0.0006, 0, 5) * 3.0) * 150;
+    // Rounded, the crests meander rather than jitter: the old noise had a
+    // fast term along z that kinked every ridge into a hairline.
+    const wander = ROUNDED ? smoothNoise(z * 0.0006, 0.5, 5) : noise2(z * 0.0006, 0, 5);
+    h += Math.sin(x * 0.0008 + wander * 3.0) * 150;
   }
   if (place.seabed !== undefined) {
     // Open water: there is no shore to walk down, the floor is simply a long
@@ -1663,8 +1671,8 @@ function buildClouds(mb, place) {
 function buildCave(mb, place) {
   const surf = [SURFACE.rock[0], SURFACE.rock[1], SURFACE.rock[2], MAT_ID.rock];
   const rng = makeRng(5150);
-  const cols = 46;
-  const rows = 64;
+  const cols = ROUNDED ? 140 : 46;
+  const rows = ROUNDED ? 260 : 64;
   const zNear = 4200;
   const zFar = -34000;
   const OPEN = -2600;                        // the roof breaks open above the plant
@@ -1698,8 +1706,12 @@ function buildCave(mb, place) {
       // surface detail underneath to say what it was made of. The shape is
       // calmer now and the stone happens on the surface, where it belongs.
       const bed = Math.sin(a * 5.0 + noise2(z * 0.0004, 0, 11) * 6.0) * 55;
-      const fracture = (noise2(Math.cos(a) * 700, z * 0.0009, 7) - 0.5) * 150;
-      const coarse = (noise2(Math.cos(a) * 220, z * 0.00028, 19) - 0.5) * 380;
+      // Rounded, the stone is worn rather than broken: the same three scales
+      // of relief, from noise that bends instead of creasing.
+      const fracture = ROUNDED ? (smoothNoise(a * 2.6, z * 0.0011, 7) - 0.5) * 170
+        : (noise2(Math.cos(a) * 700, z * 0.0009, 7) - 0.5) * 150;
+      const coarse = ROUNDED ? (smoothNoise(a * 0.9, z * 0.00032, 19) - 0.5) * 420
+        : (noise2(Math.cos(a) * 220, z * 0.00028, 19) - 0.5) * 380;
       const ripple = bed + fracture + coarse;
       const x = -Math.cos(a) * (w + ripple);
       const y = Math.sin(a) * (h + ripple * 0.6) - 300;
@@ -1790,8 +1802,8 @@ function buildCave(mb, place) {
     if (Math.abs(x) < 260 && z > -1200) continue;
     const y = groundHeight(x, z, place);
     const r = rng.range(60, 260);
-    sphere(mb, x, y + r * 0.2, z, r, 5, 8, [0.19, 0.17, 0.15], surf,
-      (px, py, pz) => (noise2(px * 0.02, pz * 0.02, 8) - 0.5) * r * 0.55
+    ballAt(mb, x, y + r * 0.2, z, r, 5, 8, [0.19, 0.17, 0.15], surf,
+      (px, py, pz) => (roughN(px * 0.02, pz * 0.02, 8) - 0.5) * r * 0.55
         - Math.max(0, py - y) * 0.5);
   }
 }
@@ -1824,8 +1836,8 @@ function buildScatter(mb, place) {
           (i) => rng.range(-0.55, 0.75) - (i === 3 ? 0.4 : 0)
             - (i === 2 ? 1 - tall * 2.4 : 0), [0.34, 0.32, 0.30], stone);
       } else {
-        sphere(mb, x, y + r * 0.16, z, w, ROUNDED ? 9 : 4, ROUNDED ? 14 : 6, [0.36, 0.34, 0.31], stone,
-          (px, py, pz) => (noise2(px * 0.05, pz * 0.05, 8) - 0.5) * w * 0.45
+        ballAt(mb, x, y + r * 0.16, z, w, ROUNDED ? 9 : 4, ROUNDED ? 14 : 6, [0.36, 0.34, 0.31], stone,
+          (px, py, pz) => (roughN(px * 0.05, pz * 0.05, 8) - 0.5) * w * 0.45
             - Math.max(0, py - y) * 0.55);
       }
     } else if (what === 'bush' || what === 'scrub') {
@@ -1883,7 +1895,7 @@ function buildScatter(mb, place) {
           { x: mx, y: my + h, z: mz, r: wide * 0.17 },
         ], 5, () => [0.80, 0.76, 0.66], () => bot);
         // the cap: a squashed dome, which is the whole silhouette
-        sphere(mb, mx, my + h, mz, wide, 4, 7, cap, bot,
+        ballAt(mb, mx, my + h, mz, wide, 4, 7, cap, bot,
           (px, py) => -Math.max(0, py - (my + h)) * 0.65);
       }
     } else if (what === 'moss') {
@@ -1892,7 +1904,7 @@ function buildScatter(mb, place) {
         const a = rng.range(0, Math.PI * 2);
         const d = r * rng.range(0, 0.7);
         const rad = r * rng.range(0.5, 0.9);
-        sphere(mb, x + Math.cos(a) * d, y + rad * 0.18, z + Math.sin(a) * d, rad, 4, 6,
+        ballAt(mb, x + Math.cos(a) * d, y + rad * 0.18, z + Math.sin(a) * d, rad, 4, 6,
           [0.16, 0.34, 0.11], bot,
           (px, py) => -Math.max(0, py - y) * 0.72);
       }
@@ -2151,20 +2163,24 @@ function buildMound(mb, place) {
  */
 function buildSurface(mb, place) {
   const surf = [SURFACE.water[0], SURFACE.water[1], SURFACE.water[2], MAT_ID.water];
-  const cols = 70;
-  const rows = 46;
+  const cols = ROUNDED ? 200 : 70;
+  const rows = ROUNDED ? 140 : 46;
   const base = mb.vertexCount;
   const y0 = place.underwater;
   const span = 60000;
 
   const waveAt = (x, z) => Math.sin(x * 0.0035 + z * 0.0021) * 46
     + Math.sin(x * 0.0012 - z * 0.0029) * 62
-    + (noise2(x * 0.0018, z * 0.0018, 23) - 0.5) * 70;
+    + ((ROUNDED ? smoothNoise : noise2)(x * 0.0018, z * 0.0018, 23) - 0.5) * 70;
 
   for (let i = 0; i <= rows; i++) {
-    const z = NEAR_Z + (-span - NEAR_Z) * (i / rows);
+    // Rounded, the rows bunch up near the camera, where the ceiling is close
+    // enough overhead for each cell to be seen as a flat plate.
+    const zt = ROUNDED ? (i / rows) ** 2 : i / rows;
+    const z = NEAR_Z + (-span - NEAR_Z) * zt;
     for (let j = 0; j <= cols; j++) {
-      const x = (j / cols - 0.5) * span * 1.6;
+      const u = j / cols - 0.5;
+      const x = (ROUNDED ? Math.sign(u) * (2 * u) ** 2 * 0.5 : u) * span * 1.6;
       const y = y0 + waveAt(x, z);
       const e = 90;
       const nx = waveAt(x + e, z) - waveAt(x - e, z);
@@ -2172,7 +2188,7 @@ function buildSurface(mb, place) {
       const len = Math.hypot(nx, 2 * e, nz) || 1;
       // Normal pointing DOWN: this is a ceiling, and it is lit from above
       // through itself, so the face the camera sees is its underside.
-      const glint = clamp01(noise2(x * 0.0009, z * 0.0009, 31) * 1.6 - 0.3);
+      const glint = clamp01((ROUNDED ? smoothNoise : noise2)(x * 0.0009, z * 0.0009, 31) * 1.6 - 0.3);
       mb.push([x, y, z], [nx / len, -(2 * e) / len, nz / len],
         [0.10 + glint * 0.55, 0.30 + glint * 0.6, 0.42 + glint * 0.5], surf,
         [x * 0.02, z * 0.02]);
@@ -2191,7 +2207,9 @@ function buildFish(mb, place) {
   const rng = makeRng(9001);
   const bot = [SURFACE.fish[0], SURFACE.fish[1], SURFACE.fish[2], MAT_ID.fish];
   for (let school = 0; school < 9; school++) {
-    const cz = -900 - rng.range(0, 11000);
+    // Not right in front of the lens: a school a few hundred units off fills a
+    // quarter of the frame with spheres and stops being fish.
+    const cz = -3200 - rng.range(0, 10000);
     const away = -cz;
     const cx = rng.range(-1, 1) * away * 0.28;
     const cy = groundHeight(cx, cz, place) + rng.range(400, place.underwater * 0.8);
@@ -2204,9 +2222,14 @@ function buildFish(mb, place) {
       const y = cy + rng.range(-1, 1) * size * 7;
       const z = cz + rng.range(-1, 1) * size * 14;
       // a body and a tail, at the size a fish is when you notice it
-      sphere(mb, x, y, z, size, 4, 6, col, bot,
+      const from = mb.vertexCount;
+      sphereAt(mb, x, y, z, size, 4, 6, col, bot,
         (px) => -Math.abs(px - x) * 0.35);
       sphere(mb, x + size * 1.5, y, z, size * 0.5, 3, 5, col, bot);
+      // The whole school swims on one phase. Keyed to where each vertex was it
+      // could not: a fish lying across the edge of two cells was pulled ninety
+      // units two ways at once and drawn as a smear.
+      mb.stamp(from, school / 9);
     }
   }
 }
@@ -2236,9 +2259,9 @@ function buildCoral(mb, x, y, z, r, rng, bot, stone) {
     for (let k = 0; k < 4; k++) {
       const a = rng.range(0, 6.28);
       const d = r * rng.range(0, 0.5);
-      sphere(mb, x + Math.cos(a) * d, y + r * 0.3, z + Math.sin(a) * d,
+      ballAt(mb, x + Math.cos(a) * d, y + r * 0.3, z + Math.sin(a) * d,
         r * rng.range(0.5, 0.8), 5, 8, col, stone,
-        (px, py, pz) => (noise2(px * 0.14, pz * 0.14, 41) - 0.5) * r * 0.5);
+        (px, py, pz) => (roughN(px * 0.14, pz * 0.14, 41) - 0.5) * r * 0.5);
     }
   } else {
     // fan: a flat blade standing across the current
@@ -2292,7 +2315,7 @@ function buildCreatures(mb, place) {
     const fz = Math.sin(face);
 
     // body, neck, head — the three masses that make an animal read as one
-    sphere(mb, x, y + s * 2.2, z, s * 1.15, 5, 7, coat, hide,
+    sphereAt(mb, x, y + s * 2.2, z, s * 1.15, 5, 7, coat, hide,
       (px) => -Math.abs(px - x) * 0.18);
     tube(mb, [
       { x: x + fx * s * 0.9, y: y + s * 2.5, z: z + fz * s * 0.9, r: s * 0.34 },
@@ -2344,6 +2367,7 @@ function buildBirds(mb, place) {
       const y = cy + rng.range(-1, 1) * size * 6;
       const z = cz + Math.sin(heading) * t * size * 22 + rng.range(-1, 1) * size * 5;
       const beat = rng.range(-0.3, 0.55);              // where in the stroke it is
+      const from = mb.vertexCount;
 
       sphere(mb, x, y, z, size * 0.42, 3, 5, [0.17, 0.16, 0.17], dark);
       for (const w of [-1, 1]) {
@@ -2357,16 +2381,19 @@ function buildBirds(mb, place) {
             r: size * 0.03 },
         ], 4, () => [0.15, 0.14, 0.15], () => dark);
       }
+      mb.stamp(from, flock / 7);       // the flock flies as one; see the fish
     }
   }
 }
 
 export function buildBackdrop(env, view = null, kind = 0, opts = {}) {
   ROUNDED = !!opts.rounded;
+  if (ROUNDED) setRound({ rows: 14, cols: 24, sides: 18 });
   try {
     return buildBackdropIn(env, view, kind);
   } finally {
     ROUNDED = false;
+    setRound(null);
   }
 }
 

@@ -6,13 +6,14 @@
 // there are shades of light. Its lines are not drawn at all: a collage has no
 // outlines, only edges where one sheet stops and the next shows.
 //
-// The world is torn, the plant is cut. Torn edges wander, and the upper sheet
-// shows the white core of the paper along its tear; which sheet is the upper is
-// the one nearer, and in a picture of land that is the one lower down. The
-// plant is cut out with scissors from stronger paper, clean-edged, and stuck
-// on last, over everything, standing a little off the page so that it throws
-// a shadow. And no two papers came from the same place: one is a magazine page
-// in halftone, one a page of small type, one plain sugar paper.
+// Most edges are cut with scissors, and some stretches are torn by hand. A cut
+// edge has no white: it is a shadow on the sheet under it and a hairline of
+// light along its own thickness. A torn one shows the white core of the paper,
+// in patches. The upper sheet is the nearer, which in a picture of land is the
+// one lower down. The plant is cut from stronger paper and stuck on last, over
+// everything, a little off the page so that it throws a shadow. The papers
+// come from different places: newspaper as it came, newspaper painted over,
+// sugar paper, a magazine photograph.
 
 import { Renderer2D } from '../flat/renderer2d.js';
 
@@ -83,24 +84,32 @@ float keyOf(vec3 c) {
   return q.r + q.g * 12.0 + q.b * 144.0;
 }
 
-/** Torn: where a point is taken to lie, for deciding which piece it is on. */
-vec2 torn(vec2 p) {
+/**
+ * How torn the edges are here. Most of a collage is cut with scissors; a
+ * stretch of it here and there is torn by hand. Not per piece: the same piece
+ * is cut along one side and torn along another, as real ones are.
+ */
+float tornness(vec2 a) { return smoothstep(0.50, 0.64, fbm(a * 0.0042 + 50.0)); }
+
+/** Where a point is taken to lie, for deciding which piece it is on. */
+vec2 warp(vec2 p) {
   vec2 a = p - uAnchor;
+  // scissors: a slow wander, never a ruled line
+  vec2 w = (vec2(vnoise(a * 0.035 + 11.0), vnoise(a * 0.035 + 37.0)) - 0.5) * 2.6;
+  // a tear: wanders a long way, and is ragged close to
+  float t = tornness(a);
   vec2 big = vec2(fbm(a * 0.03 + 3.0), fbm(a * 0.03 + 17.0)) - 0.5;
-  vec2 fine = vec2(vnoise(a * 0.5 + 5.0), vnoise(a * 0.5 + 29.0)) - 0.5;
-  return p + big * 8.0 + fine * 1.8;
+  vec2 fine = vec2(vnoise(a * 0.55 + 5.0), vnoise(a * 0.55 + 29.0)) - 0.5;
+  return p + w + t * (big * 9.0 + fine * 2.0);
 }
-/** Cut: scissors wander too, but slowly. */
 vec2 cut(vec2 p) {
   vec2 a = p - uAnchor;
-  return p + (vec2(vnoise(a * 0.05 + 11.0), vnoise(a * 0.05 + 37.0)) - 0.5) * 2.2;
+  return p + (vec2(vnoise(a * 0.04 + 11.0), vnoise(a * 0.04 + 37.0)) - 0.5) * 2.2;
 }
 
 /**
- * Paper of a colour. Not the ink: coloured paper is dyed, and dye on fibre is
- * never as clean as light on a screen. Less chroma, a warm cast, no true white
- * and no true black, and every sheet a little off its neighbour, as two packs
- * of the same colour bought a year apart are.
+ * Paper of a colour: dyed, not lit. Less chroma, a warm cast, no true white
+ * and no true black, every sheet a little off its neighbour.
  */
 vec3 paper(vec3 c, float key, float strong) {
   float l = dot(c, vec3(0.299, 0.587, 0.114));
@@ -111,150 +120,196 @@ vec3 paper(vec3 c, float key, float strong) {
   return clamp(c * (1.0 + lot * 0.07), 0.0, 1.0);
 }
 
-/** The fibre and the flecks every sheet has, printed or not. */
 float grain(vec2 a, float key) {
   float fib = fbm(a * vec2(0.9, 0.45) + key * 3.1) - 0.5;
   float fleck = smoothstep(0.86, 0.95, hash21(floor(a * 0.9) + key));
   return 1.0 + fib * 0.07 - fleck * 0.06;
 }
 
+vec2 rot(vec2 q, float a) { float s = sin(a), c = cos(a); return vec2(c * q.x - s * q.y, s * q.x + c * q.y); }
+
+/**
+ * A newspaper page, as ink coverage 0..1: columns of body type with ragged
+ * paragraph ends, a headline now and then, a halftone photograph now and then,
+ * and a rule between some of the columns.
+ */
+float newsprint(vec2 q, float seed) {
+  float colW = 54.0, gut = 6.0;
+  float ci = floor(q.x / (colW + gut));
+  float cx = q.x - ci * (colW + gut);
+  if (cx > colW) return step(abs(cx - colW - gut * 0.5), 0.4) * step(0.55, hash21(vec2(ci, seed))) * 0.7;
+  float bh = 84.0;
+  float bi = floor((q.y + hash21(vec2(ci, seed + 3.0)) * bh) / bh);
+  float by = q.y + hash21(vec2(ci, seed + 3.0)) * bh - bi * bh;
+  float h = hash21(vec2(ci * 7.1 + bi, seed));
+  if (h < 0.07) {
+    // a photograph: a picture of nothing in particular, screened
+    float img = smoothstep(0.2, 0.8, fbm(q * 0.05 + vec2(ci, bi) * 5.3 + seed));
+    vec2 g = fract(rot(q, 0.785) / 1.6) - 0.5;
+    float dotc = smoothstep(0.08, 0.0, length(g) - sqrt(1.0 - img) * 0.5);
+    return dotc * 0.55 * step(3.0, by) * step(by, bh - 30.0);
+  }
+  if (h < 0.15 && by < 20.0) {
+    // a headline: two lines of heavy type
+    float lh = 8.0;
+    float row = floor(by / lh);
+    float f = fract(by / lh);
+    float inRow = step(0.12, f) * step(f, 0.82);
+    float glyph = step(0.18, hash21(floor(vec2(cx / 3.0, row + bi * 9.0)) + seed));
+    float word = step(0.22, vnoise(vec2(cx * 0.085, row * 5.0 + bi + seed)));
+    float len = step(cx, colW * (0.45 + 0.55 * hash21(vec2(row, bi + seed))));
+    return inRow * glyph * word * len * 0.85;
+  }
+  // body type
+  float lh = 2.9;
+  float row = floor(q.y / lh);
+  float f = fract(q.y / lh);
+  float inRow = step(0.22, f) * step(f, 0.74);
+  float glyph = step(0.38, hash21(floor(vec2(cx / 1.05, row)) + seed));
+  float word = step(0.26, vnoise(vec2(cx * 0.32, row * 3.7 + seed)));
+  float pr = mod(row + floor(hash21(vec2(ci, seed)) * 9.0), 11.0);
+  float end = 1.0 - step(10.0, pr) * step(colW * (0.2 + 0.7 * hash21(vec2(floor(row / 11.0), ci + seed))), cx);
+  float indent = 1.0 - step(pr, 0.5) * step(cx, 4.0);
+  return inRow * glyph * word * end * indent * 0.7;
+}
+
+const vec3 NEWS = vec3(0.865, 0.85, 0.80);    // newsprint, a day old
+const vec3 NEWS_INK = vec3(0.16, 0.155, 0.165);
+
 /** What each paper was before it was cut up. */
-vec3 printOn(vec3 base, vec2 a, float key, float bias) {
+vec3 printOn(vec3 base, vec2 a, float key, float bias, float noNews) {
   float t = fract(hash21(vec2(key, 7.0)) + bias);
-  float ang = hash21(vec2(key, 13.0)) * 3.1416;
-  float s = sin(ang), c = cos(ang);
-  vec2 q = vec2(c * a.x - s * a.y, s * a.x + c * a.y) + hash21(vec2(key, 5.0)) * 300.0;
-  vec3 ink = base * vec3(0.70, 0.68, 0.74);
+  // a field or a sky in newsprint is wallpaper: only the pale and neutral
+  // pieces are ever the raw page, and the plant is cut from coloured paper
+  t = mix(t, 0.24 + t * 0.76, noNews);
+  vec2 q = rot(a, (hash21(vec2(key, 13.0)) - 0.5) * 0.5) + hash21(vec2(key, 5.0)) * 900.0;
   vec3 col;
   if (t < 0.24) {
-    // a magazine page: the colour is a halftone, and close to you see the dots
-    float pitch = 3.6 + hash21(vec2(key, 3.0)) * 2.2;
-    vec2 g = fract(q / pitch) - 0.5;
-    float d = smoothstep(0.38, 0.27, length(g) + (vnoise(q * 0.7) - 0.5) * 0.08);
-    col = mix(base * 1.05, ink, d * 0.30);
-  } else if (t < 0.40) {
-    // a page of type, too small to read, which is what it is from here
-    float lh = 4.8;
-    float row = floor(q.y / lh);
-    float f = fract(q.y / lh);
-    float inRow = smoothstep(0.1, 0.3, f) * smoothstep(0.76, 0.56, f);
-    float word = step(0.32, vnoise(vec2(q.x * 0.26, row * 3.7 + key)));
-    float glyph = step(0.28, hash21(floor(vec2(q.x / 1.5, row)) + key));
-    float para = step(0.1, vnoise(vec2(row * 0.6, key)));
-    col = mix(base * 1.04, ink * 0.8, inRow * word * glyph * para * 0.42);
-  } else if (t < 0.78) {
+    // a piece of the newspaper itself, as it came, the colour only hinted at
+    float ink = newsprint(q, key);
+    vec3 page = mix(NEWS, base, 0.16) * grain(q, key);
+    col = mix(page, NEWS_INK, ink * 0.62);
+  } else if (t < 0.62) {
+    // newspaper painted over: a wash of colour, the print showing through it,
+    // heavier where the brush went twice
+    float ink = newsprint(q, key + 1.0);
+    float brush = fbm(rot(q, 0.4) * vec2(0.012, 0.09) + key) - 0.5;
+    col = base * (1.0 + brush * 0.16) * (1.0 - ink * 0.13) * grain(q, key);
+  } else if (t < 0.84) {
     // sugar paper: no print, only its own coarse fibre and a mottle in the dye
     float m = fbm(q * 0.025 + key) - 0.5;
     float f = fbm(q * vec2(0.35, 0.18) + key) - 0.5;
-    col = base * (1.0 + m * 0.10 + f * 0.08);
+    col = base * (1.0 + m * 0.10 + f * 0.08) * grain(q, key);
   } else {
-    // a photograph, out of focus: blotches of its own darker and lighter
+    // a magazine photograph: the colour in a fine screen, blotched
+    vec2 g = fract(rot(q, 0.26) / 2.5) - 0.5;
     float b = fbm(q * 0.022 + key) - 0.5;
-    col = base * (1.0 + b * 0.30) + vec3(0.02);
+    float dotc = smoothstep(0.36, 0.28, length(g));
+    col = mix(base * 1.06, base * 0.72, dotc * 0.35) * (1.0 + b * 0.22);
   }
-  return col * grain(q, key);
+  return col;
 }
 
 const vec3 BOARD = vec3(0.90, 0.865, 0.79);   // what it is all stuck down on
-const vec3 CORE = vec3(0.975, 0.962, 0.93);   // the inside of a sheet, where it tears
+const vec3 CORE = vec3(0.965, 0.955, 0.925);  // the inside of a sheet, where it tears
 
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uPx;
   vec2 a = p - uAnchor;                         // fixed to the world, not the glass
 
-  // ---- the world: torn pieces ----
-  vec3 wc = worldAt(torn(p));
+  // ---- the world ----
+  vec3 wc = worldAt(warp(p));
   float wk = keyOf(wc);
   vec3 base = paper(wc, wk, 0.0);
 
-  // How far the nearest tear is above this point, and below it, and what is on
-  // the other side. The nearer sheet is the lower one on screen, and lies on
-  // top: a tear above means this is the upper sheet, showing its white core
-  // along it; a tear below means this is under, in the other one's shadow.
+  // How far the nearest edge is above this point, and below it. The nearer
+  // sheet is the lower one on screen, and lies on top.
   float up = 99.0, down = 99.0;
   vec3 upC = wc, downC = wc;
-  for (int r = 1; r <= 7; r++) {
+  for (int r = 1; r <= 8; r++) {
     float fr = float(r);
     for (int i = -1; i <= 1; i++) {
       vec2 d = normalize(vec2(float(i) * 0.8, 1.0));
       if (up > 98.0) {
-        vec3 c = worldAt(torn(p - d * fr));
+        vec3 c = worldAt(warp(p - d * fr));
         if (keyOf(c) != wk) { up = fr; upC = c; }
       }
       if (down > 98.0) {
-        vec3 c = worldAt(torn(p + d * fr));
+        vec3 c = worldAt(warp(p + d * fr));
         if (keyOf(c) != wk) { down = fr; downC = c; }
       }
     }
   }
-  // two sheets of nearly the same colour do not read as a tear, only as a seam
   float upK = smoothstep(0.035, 0.11, distance(base, paper(upC, keyOf(upC), 0.0)));
   float downK = smoothstep(0.035, 0.11, distance(base, paper(downC, keyOf(downC), 0.0)));
 
-  vec3 col = printOn(base, a, wk, 0.0);
+  // Which pieces may be the raw newspaper: those near its own colour, the
+  // greys and beiges. Decided by the colour, so a piece is one paper all over.
+  float sat = (max(wc.r, max(wc.g, wc.b)) - min(wc.r, min(wc.g, wc.b))) / max(1e-3, max(wc.r, max(wc.g, wc.b)));
+  float big = step(0.32, sat);
+  vec3 col = printOn(base, a, wk, 0.0, big);
 
-  // under: the shadow of the sheet over it, soft, and a sliver of the board
-  // where the two did not quite meet
-  float sh = pow(1.0 - smoothstep(0.0, 7.0, down), 1.5) * downK;
-  col *= 1.0 - sh * 0.34;
-  float gap = step(down, 1.6) * smoothstep(0.62, 0.78, vnoise(a * vec2(0.08, 0.5) + 9.0)) * downK;
-  col = mix(col, BOARD * grain(a, 3.0) * 0.92, gap);
+  // Under another sheet: a tight contact shadow right at its edge and a soft
+  // one spreading from it. This, not a line, is what an edge of paper is.
+  float contact = 1.0 - smoothstep(0.0, 2.2, down);
+  float spread = pow(1.0 - smoothstep(0.0, 8.0, down), 1.6);
+  col *= 1.0 - (contact * 0.20 + spread * 0.20) * downK;
 
-  // upper: the tear. Wide where the paper split badly, a hairline where it went
-  // clean, and its outer edge is fibre, not a line
-  float w = (0.8 + 3.6 * pow(fbm(a * 0.045 + 21.0), 1.6)) * upK;
-  float edge = 1.0 - smoothstep(w - 0.6, w + 0.4, up - 0.5 + (vnoise(a * 1.4) - 0.5) * 1.2);
-  vec3 core = CORE * (0.94 + 0.06 * vnoise(a * vec2(1.8, 0.6)));
-  col = mix(col, core, edge);
+  // The upper sheet's own edge. Cut, it catches the light along its thickness:
+  // a hairline brighter, no more. Torn, the white core of the sheet shows, but
+  // only where the tear ran the right way, in patches, never as a band of one
+  // width, and its outer edge is loose fibre.
+  float tw = tornness(a);
+  col *= 1.0 + 0.07 * (1.0 - smoothstep(0.6, 1.6, up)) * upK * (1.0 - tw);
+  float spots = smoothstep(0.38, 0.62, fbm(a * 0.05 + 21.0));
+  float w = (0.4 + 3.4 * pow(fbm(a * 0.09 + 7.0), 1.5)) * spots * tw * upK;
+  float fibre = (vnoise(a * vec2(2.4, 1.1)) - 0.5) * 1.4 + (vnoise(a * 5.0) - 0.5) * 0.6;
+  float core = 1.0 - smoothstep(w - 0.5, w + 0.3, up - 0.5 + fibre);
+  col = mix(col, mix(CORE, base, 0.12) * (0.95 + 0.05 * vnoise(a * 1.7)), core * step(0.15, w));
 
   // ---- the plant: cut out and stuck on top ----
   vec2 cp = cut(p);
   vec4 pc = plantAt(cp);
-  // cut wide, as scissors round a small shape always are: a margin of the
-  // white sheet it was cut from goes round it, never quite the same width
-  float mw = 2.6 + 1.6 * vnoise(a * 0.06 + 2.0);
+  // usually cut close; here and there the scissors went wide and a sliver of
+  // the sheet it was cut from is still on it
+  float mw = max(0.0, vnoise(a * 0.025 + 2.0) * 7.0 - 4.0);
   float margin = 0.0;
-  if (pc.a < 0.5) {
-    for (int i = 0; i < 12; i++) {
-      float b = float(i) * 0.5236;
-      for (int r = 1; r <= 2; r++) {
-        if (plantAt(cp + vec2(cos(b), sin(b)) * mw * float(r) * 0.5).a > 0.5) margin = 1.0;
-      }
+  if (pc.a < 0.5 && mw > 0.3) {
+    for (int i = 0; i < 8; i++) {
+      float b = float(i) * 0.7854;
+      if (plantAt(cp + vec2(cos(b), sin(b)) * mw).a > 0.5) margin = 1.0;
     }
   }
-  // its shadow on the page: stuck on with a pad of glue, so it stands a little
-  // proud, and the window is up and to the left
-  float ps = 0.0;
+  float held = max(pc.a, margin);
+  // its shadow: it stands off the page on a pad of glue, lit from the upper left
+  float ps = 0.0, pt = 0.0;
   for (int i = 0; i < 8; i++) {
     float b = float(i) * 0.7854;
-    vec2 q = cut(p + vec2(-3.0, -4.0) + vec2(cos(b), sin(b)) * 2.6);
-    float m = plantAt(q).a;
-    for (int j = 0; j < 4 && m < 0.5; j++) {
-      float c = float(j) * 1.5708 + 0.4;
-      m = max(m, plantAt(q + vec2(cos(c), sin(c)) * mw).a);
-    }
-    ps += m;
+    ps += plantAt(cut(p + vec2(-3.4, -4.4) + vec2(cos(b), sin(b)) * 3.0)).a;
+    pt += plantAt(cut(p + vec2(-1.2, -1.6) + vec2(cos(b), sin(b)) * 0.9)).a;
   }
-  col *= 1.0 - (ps / 8.0) * 0.34 * (1.0 - max(pc.a, margin));
-  col = mix(col, CORE * grain(a, 17.0), margin);
+  col *= 1.0 - (ps / 8.0 * 0.26 + pt / 8.0 * 0.22) * (1.0 - held);
+  col = mix(col, NEWS * grain(a, 17.0), margin);
   if (pc.a > 0.5) {
     float pk = keyOf(pc.rgb);
-    vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), a, pk, 0.37);
-    // where one cut piece lies on another, a hairline of shadow under the edge
+    vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), a, pk, 0.45, 1.0);
+    // one cut piece over another: the upper one's edge throws a hairline
     float e = 0.0;
     for (int i = 0; i < 4; i++) {
       float b = float(i) * 1.5708 + 0.785;
       vec4 q = plantAt(cut(p + vec2(cos(b), sin(b)) * 1.5));
       if (q.a > 0.5 && keyOf(q.rgb) != pk) e = 1.0;
     }
-    col = pcol * (1.0 - e * 0.16);
+    pcol *= 1.0 - e * 0.16;
+    // and the outer edge, facing the light, catches it along the paper's thickness
+    float lit = 1.0 - plantAt(cut(p + vec2(-1.1, -1.1))).a;
+    col = pcol * (1.0 + lit * 0.10);
   }
 
-  // The whole thing photographed: the glue cockles the board, and the light
-  // from the window falls off across it.
+  // the whole board photographed: glue cockle, and the window's fall-off
   vec2 uv = p * uPx / uRes;
   col *= 0.985 + 0.03 * (fbm(a * 0.006) - 0.5);
-  col *= 1.03 - 0.06 * uv.x * 0.5 - 0.05 * uv.y;
+  col *= 1.03 - 0.03 * uv.x - 0.05 * uv.y;
   col *= 1.0 - 0.16 * pow(clamp(length(uv - 0.5) * 1.25, 0.0, 1.0), 2.6);
   outColour = vec4(clamp(col, 0.0, 1.0), 1.0);
 }`;

@@ -11,6 +11,7 @@ import { PROMPTS, SEASONS, ROOTS_TURNS, seasonAt } from '../src/prompts.js';
 import { cultivarName, WORDS, GENERA } from '../src/names.js';
 import { TUNING } from '../src/vitality.js';
 import { MATERIALS } from '../src/materials.js';
+import { wordsOf, LOOKS, LOOK_BY_ID } from '../src/looks.js';
 import { buildPlant, buildBackdrop, PLACES, setDisplacement, setStyle, STEM_DRAWN } from '../src/gl/scene.js';
 import { partBoxes, segBoxDist, boxesOverlap, PART_WIDTH, PART_BAND } from '../src/growth.js';
 import { ENVIRONMENTS } from '../src/environment.js';
@@ -847,6 +848,22 @@ check('a rough material displaces its own surface', () => {
   return null;
 });
 
+check('the ASCII look is set in what was asked and answered', () => {
+  for (const id of ['3d', 'print', 'ascii', 'crochet', 'riso', 'clay']) if (!LOOK_BY_ID[id]) return `the ${id} look is missing`;
+  if (new Set(LOOKS.map((l) => l.id)).size !== LOOKS.length) return 'two looks share an id';
+  if (!LOOK_BY_ID.print) return 'the pages have lost the look they open on';
+  if (LOOK_BY_ID.flat) return 'Flat is back: it was folded into Illustrated';
+  const e = playGame('words', 'wordsg', alwaysFirst, 5);
+  const text = wordsOf(e);
+  for (const sec of e.plant.sections) {
+    if (!sec.promptText) continue;
+    if (!text.includes(sec.promptText)) return `a question is missing: ${sec.promptText}`;
+    if (!text.includes(String(sec.responseLabel).replace(/[.?!]*$/, ''))) return `an answer is missing: ${sec.responseLabel}`;
+  }
+  if (e.prompt && !text.endsWith(e.prompt.text)) return 'the question on the table is not last';
+  return null;
+});
+
 check('every material and environment is reachable', () => {
   // Enough games that a material appearing in roughly one switch in a hundred
   // still turns up. With thirty-five materials the old sample was too small to
@@ -862,8 +879,13 @@ check('every material and environment is reachable', () => {
       if (sec.envId) envs.add(sec.envId);
     }
   }
-  const missM = MATERIALS.filter((m) => !mats.has(m.id)).map((m) => m.id);
-  const rarest = MATERIALS
+  // Substances: the drawn states are no longer something a plant turns into.
+  // How the picture is drawn is a look, and the player's to choose (looks.js).
+  const substances = MATERIALS.filter((m) => !m.graphic);
+  const drawnSeen = MATERIALS.filter((m) => m.graphic && mats.has(m.id)).map((m) => m.id);
+  if (drawnSeen.length) return `a plant turned into a drawn state on its own: ${drawnSeen.join(', ')}`;
+  const missM = substances.filter((m) => !mats.has(m.id)).map((m) => m.id);
+  const rarest = substances
     .map((m) => [m.id, mats.get(m.id) || 0])
     .sort((a, b) => a[1] - b[1])[0];
   const missE = ENVIRONMENTS.filter((e) => !envs.has(e.id)).map((e) => e.id);

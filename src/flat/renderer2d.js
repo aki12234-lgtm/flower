@@ -100,7 +100,9 @@ export class Renderer2D {
     this.ph = h;
   }
 
-  invalidate() { this.plantKey = null; this.settledKey = null; }
+  // (the kept picture goes too: its key is the plant's shape, and a plant can
+  // change what it is drawn in without changing shape)
+  invalidate() { this.plantKey = null; this.settledKey = null; this.stillView = null; }
 
   /** The camera y that puts `worldY` at `frac` of the way down the frame. */
   camYToPlaceAt(worldY, frac, zoom) {

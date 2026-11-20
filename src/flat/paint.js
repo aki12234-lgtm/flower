@@ -84,6 +84,17 @@ function discOutline(s) {
   return out;
 }
 
+/** One shape's outline as points, in world terms: for drawing it some other way. */
+export function outlineOf(s) {
+  if (s.type === 'disc') {
+    if (s.rim) return discOutline(s);
+    const n = Math.max(12, Math.min(40, Math.round(s.r * 1.5)));
+    return Array.from({ length: n }, (_, k) => ({ x: s.x + Math.cos((k / n) * Math.PI * 2) * s.r, y: s.y + Math.sin((k / n) * Math.PI * 2) * s.r }));
+  }
+  if (s.type === 'band') return s.outline || (s.outline = bandOutline(s));
+  return s.pts;
+}
+
 /** Add one shape's outline to a path. */
 export function addShape(path, s) {
   if (s.type === 'disc') {

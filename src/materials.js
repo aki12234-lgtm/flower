@@ -2559,7 +2559,11 @@ export function chooseMaterial(rng, values, derived, ctx, shift = 0) {
   if (!rng.chance(urge)) return current;
 
   const recent = new Set((ctx.matRecent || []).slice(-4));
-  const pool = MATERIALS.filter((m) => m.id !== current);
+  // Substances only. The drawn states (ASCII, halftone, blueprint...) used to
+  // be in this pool too, so a plant could turn into a picture of itself on a
+  // roll nobody asked for. How the picture is drawn is the player's choice now
+  // (looks.js); what the plant is made of is still the answers'.
+  const pool = MATERIALS.filter((m) => m.id !== current && !m.graphic);
   return rng.weighted(pool, (m) => {
     const a = Math.max(0.05, m.affinity(values, derived));
     // The flat idioms are meant to be occasional collisions, not the default

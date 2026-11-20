@@ -16,6 +16,16 @@
 // sugar paper, a magazine photograph.
 
 import { Renderer2D } from '../flat/renderer2d.js';
+import { buildFlatPlant } from '../flat/plant2d.js';
+import { drawPlantLive } from '../flat/paint.js';
+
+/**
+ * How a section arrives. Paper does not grow: a cut-out film is made by laying
+ * pieces down one at a time and photographing each. So a new section comes in
+ * this many pieces, each whole the moment it appears, and each held off the
+ * page at first, its shadow large and soft, then pressed down flat.
+ */
+const PIECES = 5;
 
 const VS = `#version 300 es
 in vec2 aPos;
@@ -25,6 +35,8 @@ const FS = `#version 300 es
 precision highp float;
 uniform sampler2D uWorld;
 uniform sampler2D uPlant;
+uniform sampler2D uNew;    // the piece being laid down now
+uniform float uLift;       // how far off the page it still is, 0..1
 uniform sampler2D uFar;    // where the far range shows: that layer is cut from the newspaper
 uniform vec2 uRes;      // device pixels
 uniform float uPx;      // device pixels to a CSS pixel
@@ -292,13 +304,19 @@ void main() {
   }
   float held = max(pc.a, margin);
   // its shadow: it stands off the page on a pad of glue, lit from the upper left
-  float ps = 0.0, pt = 0.0;
+  float ps = 0.0, pt = 0.0, pn = 0.0;
+  float lo = 1.0 + uLift * 2.6;
   for (int i = 0; i < 8; i++) {
     float b = float(i) * 0.7854;
-    ps += plantAt(cut(p + vec2(-3.4, -4.4) + vec2(cos(b), sin(b)) * 3.0)).a;
-    pt += plantAt(cut(p + vec2(-1.2, -1.6) + vec2(cos(b), sin(b)) * 0.9)).a;
+    vec2 o = vec2(cos(b), sin(b));
+    ps += plantAt(cut(p + vec2(-3.4, -4.4) + o * 3.0)).a;
+    pt += plantAt(cut(p + vec2(-1.2, -1.6) + o * 0.9)).a;
+    // the piece in the hand: its shadow further off and softer the higher it is
+    if (uLift > 0.0) pn += texture(uNew, uvAt(cut(p + vec2(-3.4, -4.4) * lo + o * 3.0 * lo))).a;
   }
+  float newHere = uLift > 0.0 ? step(0.5, texture(uNew, uvAt(cp)).a) : 0.0;
   col *= 1.0 - (ps / 8.0 * 0.26 + pt / 8.0 * 0.22) * (1.0 - held);
+  col *= 1.0 - (pn / 8.0) * 0.34 * uLift * (1.0 - held);
   col = mix(col, NEWS * grain(a, 17.0), margin);
   if (pc.a > 0.5) {
     float pk = keyOf(pc.rgb);
@@ -314,6 +332,8 @@ void main() {
     // and the outer edge, facing the light, catches it along the paper's thickness
     float lit = 1.0 - plantAt(cut(p + vec2(-1.1, -1.1))).a;
     col = pcol * (1.0 + lit * 0.10);
+    // held up towards the lamp, the new piece is a touch brighter than the rest
+    col *= 1.0 + newHere * uLift * 0.06;
   }
 
   // the whole board photographed: glue cockle, and the window's fall-off
@@ -354,6 +374,18 @@ class Sketch extends Renderer2D {
   }
 
   render(plant, cam, time, sections, reveal = null) {
+    // laid down in pieces: the growth is held at whole steps, and what came in
+    // with the latest one is drawn again on a sheet of its own
+    this.lift = 0;
+    let before = null;
+    if (reveal) {
+      const f = reveal.progress * PIECES;
+      const k = Math.min(PIECES, Math.floor(f) + 1);
+      const into = f - (k - 1);
+      this.lift = k >= PIECES && reveal.progress >= 1 ? 0 : 1 - Math.min(1, into / 0.55);
+      before = (k - 1) / PIECES;
+      reveal = { ...reveal, progress: k / PIECES };
+    }
     this.resize();
     this.ensureWorld();
     this.ensurePlant(plant, reveal);
@@ -396,6 +428,24 @@ class Sketch extends Renderer2D {
     pc.setTransform(1, 0, 0, 1, 0, 0);
     pc.clearRect(0, 0, this.pw, this.ph);
     this.drawPlant(pc, v);
+    // the newest piece on its own: this step's growth less the last step's
+    if (!this.newSheet || this.newSheet.width !== this.pw || this.newSheet.height !== this.ph) {
+      this.newSheet = canvasOf(this.pw, this.ph);
+    }
+    const nc = this.newSheet.getContext('2d');
+    nc.setTransform(1, 0, 0, 1, 0, 0);
+    nc.globalCompositeOperation = 'source-over';
+    nc.clearRect(0, 0, this.pw, this.ph);
+    if (reveal && this.lift > 0) {
+      v.at(nc, 0);
+      const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour: () => '#000', marks: 0 };
+      drawPlantLive(nc, buildFlatPlant(plant, reveal, 'growing'), opts);
+      if (before > 0) {
+        nc.globalCompositeOperation = 'destination-out';
+        drawPlantLive(nc, buildFlatPlant(plant, { ...reveal, progress: before }, 'growing'), opts);
+        nc.globalCompositeOperation = 'source-over';
+      }
+    }
   }
 }
 
@@ -430,6 +480,7 @@ export class RendererCollage {
     this.texWorld = tex();
     this.texPlant = tex();
     this.texFar = tex();
+    this.texNew = tex();
     this.resize();
   }
 
@@ -475,8 +526,13 @@ export class RendererCollage {
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, this.texFar);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.farSheet);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.texNew);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.newSheet);
     gl.useProgram(this.prog);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uFar'), 2);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uNew'), 3);
+    gl.uniform1f(gl.getUniformLocation(this.prog, 'uLift'), this.sketch.lift || 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uWorld'), 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uPlant'), 1);
     gl.uniform2f(gl.getUniformLocation(this.prog, 'uRes'), this.pw, this.ph);

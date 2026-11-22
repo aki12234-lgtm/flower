@@ -22,9 +22,9 @@ import { drawPlantLive } from '../flat/paint.js';
 /**
  * How a section arrives. Paper does not grow: a cut-out film is made by laying
  * pieces down one at a time and photographing each. So a new section comes in
- * this many pieces, and each comes folded in alongside the stem and swings
- * open about the point where it joins, held a little off the page until it is
- * pressed down.
+ * this many pieces, each laid down whole, held a little off the page until
+ * it is pressed down; and a flower or a leaf, which is a symmetrical cut-out,
+ * comes folded in half and opens out.
  */
 const PIECES = 4;
 
@@ -394,7 +394,7 @@ class Sketch extends Renderer2D {
   render(plant, cam, time, sections, reveal = null) {
     // Laid down in pieces. The growth is held at whole steps: everything up to
     // the last step is the plant, and the step's new piece is drawn on a sheet
-    // of its own, folded, and opened out about the point where it joins.
+    // of its own, held off the page until it is pressed down.
     this.lift = 0;
     let now = null;
     let prev = null;
@@ -406,6 +406,24 @@ class Sketch extends Renderer2D {
       now = { ...reveal, progress: k / PIECES };
       prev = { ...reveal, progress: (k - 1) / PIECES };
       this.lift = 1 - u * u * (3 - 2 * u);
+    }
+    // Heads open on their own clock, as the stem reaches them, and are drawn
+    // apart from the rest while they do: everything else is built from a plant
+    // that does not have them yet.
+    const opening = [];
+    if (reveal && reveal.progress < 1) {
+      const section = plant.sections.find((sc) => sc.step === reveal.step);
+      if (section) {
+        const k = reveal.progress * section.steps;
+        const OPEN_OVER = 2.2;
+        const keep = [];
+        for (const node of section.nodes) {
+          const open = Math.min(1, Math.max(0, (k - Math.max(0, node.k - OPEN_OVER)) / OPEN_OVER));
+          if (open >= 1) keep.push(node);
+          else if (open > 0) opening.push({ section, node, open });
+        }
+        plant = { ...plant, sections: plant.sections.map((sc) => (sc === section ? { ...sc, nodes: keep } : sc)) };
+      }
     }
     this.resize();
     this.ensureWorld();
@@ -486,35 +504,64 @@ class Sketch extends Renderer2D {
       pc.globalCompositeOperation = 'source-over';
     }
 
-    // the piece in hand: this step's growth less the last step's, folded back
-    // over its hinge and opening out. Its back is the white of the sheet.
+    // the piece in hand: this step's growth less the last step's
     const nc = this.sheet('newSheet').getContext('2d');
     nc.setTransform(1, 0, 0, 1, 0, 0);
     nc.globalCompositeOperation = 'source-over';
     nc.clearRect(0, 0, this.pw, this.ph);
     if (now) {
       v.at(nc, 0);
-      // Swung open about its joint, like a paper hinge: it starts folded in
-      // alongside the stem, swings out, goes a little past and settles back.
-      // A turn keeps the piece's shape, so it reads as the same piece moving.
-      const hinge = this.hingeOf(plant, now, prev);
-      if (hinge && u < 1) {
-        const [hx, hy] = hinge;
-        const c1 = 1.4;
-        const t = u - 1;
-        const eased = 1 + (c1 + 1) * t * t * t + c1 * t * t;
-        const side = (now.step * 7 + Math.round(now.progress * PIECES)) % 2 ? 1 : -1;
-        const ang = (1 - eased) * 2.4 * side;
-        const cs = Math.cos(ang), sn = Math.sin(ang);
-        nc.transform(cs, sn, -sn, cs, hx - (cs * hx - sn * hy), hy - (sn * hx + cs * hy));
-      }
       drawPlantLive(nc, grownNow, opts);
       if (grownBefore) {
         nc.globalCompositeOperation = 'destination-out';
         drawPlantLive(nc, grownBefore, opts);
         nc.globalCompositeOperation = 'source-over';
       }
+      // and the heads that are opening, each unfolding on its own
+      for (const o of opening) this.unfoldHead(nc, v, plant, o, opts);
     }
+  }
+
+  /**
+   * A head is a symmetrical cut-out, and a symmetrical cut-out is made folded:
+   * so it arrives folded in half down its own middle, one half lying over the
+   * other with the white back of the sheet showing, and opens out flat. The
+   * half that moves is drawn squashed across the crease by how far open it is,
+   * and its back is drawn as the back of the paper until it passes upright.
+   */
+  unfoldHead(ctx, v, plant, { section, node, open }, opts) {
+    const shapes = buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all');
+    const e = open * open * (3 - 2 * open);
+    const c = Math.cos(Math.PI * (1 - e));                   // -1 folded over, 1 open
+    const sd = [Math.sin(node.angle), Math.cos(node.angle)];  // up the head
+    const sx = [-sd[1], sd[0]];                               // across it
+    const R = node.size * 4 + 40;
+    const H = [node.x, node.y];
+    const half = (sign) => {
+      ctx.beginPath();
+      ctx.moveTo(H[0] - sd[0] * R, H[1] - sd[1] * R);
+      ctx.lineTo(H[0] + sd[0] * R, H[1] + sd[1] * R);
+      ctx.lineTo(H[0] + sd[0] * R + sx[0] * R * sign, H[1] + sd[1] * R + sx[1] * R * sign);
+      ctx.lineTo(H[0] - sd[0] * R + sx[0] * R * sign, H[1] - sd[1] * R + sx[1] * R * sign);
+      ctx.closePath();
+    };
+    // the half that stays
+    ctx.save();
+    half(-1);
+    ctx.clip();
+    drawPlantLive(ctx, shapes, opts);
+    ctx.restore();
+    // the half that opens: scaled across the crease by c, about the crease
+    ctx.save();
+    const g = c - 1;
+    const a = 1 + g * sx[0] * sx[0], b = g * sx[0] * sx[1], d = 1 + g * sx[1] * sx[1];
+    ctx.transform(a, b, b, d, H[0] - (a * H[0] + b * H[1]), H[1] - (b * H[0] + d * H[1]));
+    half(1);
+    ctx.clip();
+    ctx.filter = c < 0 ? 'saturate(0.08) brightness(1.55)' : `brightness(${(0.78 + 0.22 * c).toFixed(3)})`;
+    drawPlantLive(ctx, shapes, opts);
+    ctx.filter = 'none';
+    ctx.restore();
   }
 
   /** A canvas of the screen's size, kept by name. */
@@ -525,37 +572,6 @@ class Sketch extends Renderer2D {
     return this[name];
   }
 
-  /**
-   * Where the new piece joins the plant and which way the stem runs there: the
-   * tip as it was a step ago, and the stem's own direction at that point. The
-   * crease is across the stem, so the piece folds back over the stem it grows
-   * from. (Not the direction to the new tip: on a piece that bends, that puts
-   * the crease askew and the folded piece lands off to one side.)
-   */
-  hingeOf(plant, now, prev) {
-    const section = plant.sections.find((sc) => sc.step === now.step);
-    const seg = section?.segments?.[0];
-    if (!seg || seg.points.length < 2) return null;
-    const at = (kk) => {
-      let last = seg.points[0];
-      for (const q of seg.points) { if (q.k <= kk) last = q; else break; }
-      return last;
-    };
-    const kk = prev.progress * section.steps;
-    const h = at(kk);
-    const i = seg.points.indexOf(h);
-    const nx = seg.points[Math.min(seg.points.length - 1, i + 1)];
-    const px = seg.points[Math.max(0, i - 1)];
-    let dx = nx.x - px.x;
-    let dy = nx.y - px.y;
-    if (Math.hypot(dx, dy) < 1e-3) {
-      const n = seg.points.length;
-      dx = seg.points[n - 1].x - seg.points[n - 2].x;
-      dy = seg.points[n - 1].y - seg.points[n - 2].y;
-    }
-    const l = Math.hypot(dx, dy) || 1;
-    return [h.x, h.y, dx / l, dy / l];
-  }
 }
 
 export class RendererCollage {

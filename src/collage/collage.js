@@ -17,7 +17,98 @@
 
 import { Renderer2D } from '../flat/renderer2d.js';
 import { buildFlatPlant } from '../flat/plant2d.js';
-import { drawPlantLive, patternAlpha } from '../flat/paint.js';
+import { drawPlantLive, patternAlpha, outlineOf } from '../flat/paint.js';
+
+/**
+ * The plant is folded, not cut flat: origami. Every shape is split into the
+ * facets it would be folded into, and each facet is filled with how much
+ * light it catches, as a grey, on a sheet of its own; the shader multiplies
+ * the paper by that. A stem is a strip folded once down its length, so it
+ * has a lit side and a shaded side, and which is which turns at every bend.
+ * A petal or a leaf has a crease down its middle. A round thing (a bud, a
+ * flower's eye) is a little folded pyramid.
+ */
+const FOLD_LIGHT = (() => {
+  const l = Math.hypot(-0.45, 0.55, 0.7);
+  return [-0.45 / l, 0.55 / l, 0.7 / l];
+})();
+const TILT = 0.75;
+function facetGrey(nx, ny) {
+  const l = Math.hypot(nx * TILT, ny * TILT, 1);
+  const lit = (nx * TILT * FOLD_LIGHT[0] + ny * TILT * FOLD_LIGHT[1] + FOLD_LIGHT[2]) / l;
+  const g = Math.round(Math.max(0, Math.min(1, lit)) * 255);
+  return `rgb(${g},${g},${g})`;
+}
+function drawFolds(ctx, shapes) {
+  for (const s of shapes) {
+    if (s.type === 'band') {
+      const p = s.pts;
+      for (let i = 0; i + 1 < p.length; i++) {
+        const a = p[i], b = p[i + 1];
+        const tx = b.x - a.x, ty = b.y - a.y;
+        const tl = Math.hypot(tx, ty) || 1;
+        const px = -ty / tl, py = tx / tl;
+        for (const side of [1, -1]) {
+          const wa = side > 0 ? a.l : a.r, wb = side > 0 ? b.l : b.r;
+          ctx.fillStyle = facetGrey(px * side, py * side);
+          ctx.beginPath();
+          ctx.moveTo(a.x - tx / tl * 0.3, a.y - ty / tl * 0.3);
+          ctx.lineTo(b.x + tx / tl * 0.3, b.y + ty / tl * 0.3);
+          ctx.lineTo(b.x + px * side * wb, b.y + py * side * wb);
+          ctx.lineTo(a.x + px * side * wa, a.y + py * side * wa);
+          ctx.closePath();
+          ctx.fill();
+        }
+      }
+    } else if (s.type === 'disc') {
+      const n = 8;
+      const out = outlineOf(s);
+      for (let k = 0; k < n; k++) {
+        const a0 = (k / n) * Math.PI * 2, a1 = ((k + 1) / n) * Math.PI * 2, am = (a0 + a1) / 2;
+        ctx.fillStyle = facetGrey(Math.cos(am), Math.sin(am));
+        ctx.beginPath();
+        ctx.moveTo(s.x, s.y);
+        const m = out.length;
+        for (let j = Math.floor((k / n) * m); j <= Math.ceil(((k + 1) / n) * m); j++) {
+          const q = out[j % m];
+          ctx.lineTo(q.x, q.y);
+        }
+        ctx.closePath();
+        ctx.fill();
+      }
+    } else {
+      // a crease down the long axis, the two halves folded up towards it
+      const pts = outlineOf(s);
+      if (!pts || pts.length < 3) continue;
+      let cx = 0, cy = 0;
+      for (const q of pts) { cx += q.x; cy += q.y; }
+      cx /= pts.length; cy /= pts.length;
+      let sxx = 0, syy = 0, sxy = 0;
+      for (const q of pts) { const dx = q.x - cx, dy = q.y - cy; sxx += dx * dx; syy += dy * dy; sxy += dx * dy; }
+      const ang = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+      const ux = Math.cos(ang), uy = Math.sin(ang);
+      const R = Math.sqrt(Math.max(sxx, syy) / pts.length) * 6 + 10;
+      for (const side of [1, -1]) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(cx - ux * R, cy - uy * R);
+        ctx.lineTo(cx + ux * R, cy + uy * R);
+        ctx.lineTo(cx + ux * R - uy * R * side, cy + uy * R + ux * R * side);
+        ctx.lineTo(cx - ux * R - uy * R * side, cy - uy * R + ux * R * side);
+        ctx.closePath();
+        ctx.clip();
+        // each half tilts up towards the crease: its normal leans across, inward
+        ctx.fillStyle = facetGrey(uy * side * 0.8, -ux * side * 0.8);
+        ctx.beginPath();
+        ctx.moveTo(pts[0].x, pts[0].y);
+        for (let j = 1; j < pts.length; j++) ctx.lineTo(pts[j].x, pts[j].y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+}
 
 /**
  * How a section arrives. Paper does not grow: a cut-out film is made by laying
@@ -39,6 +130,8 @@ uniform sampler2D uPlant;
 uniform sampler2D uNew;    // the piece being laid down now
 uniform float uLift;       // how far off the page it still is, 0..1
 uniform sampler2D uHeads;  // the heads that are opening, drawn flat
+uniform sampler2D uFold;   // how much light each facet of the plant catches
+uniform sampler2D uHeadFold;
 uniform vec4 uHead[3];     // each: the crease's point (xy) and direction (zw), CSS px
 uniform vec2 uHeadP[3];    // each: how far turned over (0 flat open, pi folded), and its reach
 uniform int uHeadN;
@@ -237,6 +330,21 @@ vec3 printOn(vec3 base, vec2 a, float key, float bias, float noNews) {
   return col;
 }
 
+/**
+ * Origami: the paper times the light its facet catches, and a fine line where
+ * two facets meet, which is the crease. A flat facet (facing the viewer)
+ * catches FLAT, and is left as it is.
+ */
+const float FLAT = 0.70;
+vec3 folded(vec3 c, sampler2D fs, vec2 q) {
+  float f = texture(fs, uvAt(q)).r;
+  float fx = texture(fs, uvAt(q + vec2(0.8, 0.0))).r;
+  float fy = texture(fs, uvAt(q + vec2(0.0, 0.8))).r;
+  float shade = clamp(mix(1.0, f / FLAT, 0.9), 0.5, 1.3);
+  float crease = smoothstep(0.03, 0.10, max(abs(fx - f), abs(fy - f)));
+  return c * shade * (1.0 - crease * 0.14);
+}
+
 const vec3 BOARD = vec3(0.90, 0.865, 0.79);   // what it is all stuck down on
 const vec3 CORE = vec3(0.965, 0.955, 0.925);  // the inside of a sheet, where it tears
 
@@ -347,7 +455,7 @@ void main() {
     pcol *= 1.0 - e * 0.16;
     // and the outer edge, facing the light, catches it along the paper's thickness
     float lit = 1.0 - plantAt(cut(p + vec2(-1.1, -1.1))).a;
-    col = pcol * (1.0 + lit * 0.10);
+    col = folded(pcol * (1.0 + lit * 0.10), uFold, cp);
   }
   // The piece in hand, opening: over everything, its shadow cast on whatever
   // it is held above, further off and softer the higher it is.
@@ -355,7 +463,7 @@ void main() {
   if (newHere > 0.5) {
     vec3 nrgb = nw.rgb / max(nw.a, 1e-3);
     float nk = keyOf(nrgb);
-    col = printOn(paper(nrgb, nk, 1.0), ap, nk, 0.45, 1.0) * (1.0 + uLift * 0.06);
+    col = folded(printOn(paper(nrgb, nk, 1.0), ap, nk, 0.45, 1.0) * (1.0 + uLift * 0.06), uFold, cp);
   }
 
   // ---- heads opening: half on the page, half turning over above it ----
@@ -391,7 +499,7 @@ void main() {
           float lit = (0.55 + 0.45 * max(dot(nrm, normalize(LIGHT)), 0.0)) / (0.55 + 0.45 * normalize(LIGHT).z);
           vec3 rgb = hc.rgb / max(hc.a, 1e-3);
           float hk = keyOf(rgb);
-          vec3 face = back ? CORE * grain(src - uAnchor, 31.0) : printOn(paper(rgb, hk, 1.0), src - uAnchor, hk, 0.45, 1.0);
+          vec3 face = back ? CORE * grain(src - uAnchor, 31.0) : folded(printOn(paper(rgb, hk, 1.0), src - uAnchor, hk, 0.45, 1.0), uHeadFold, src);
           flapCol = face * lit;
         }
       }
@@ -405,7 +513,7 @@ void main() {
         vec3 rgb = hb.rgb / max(hb.a, 1e-3);
         float hk = keyOf(rgb);
         baseHit = 1.0;
-        baseCol = printOn(paper(rgb, hk, 1.0), ap, hk, 0.45, 1.0);
+        baseCol = folded(printOn(paper(rgb, hk, 1.0), ap, hk, 0.45, 1.0), uHeadFold, p);
       }
     }
     // the shadow of the turning half, cast away from the light, longer the
@@ -667,6 +775,27 @@ class Sketch extends Renderer2D {
         });
       }
     }
+
+    // the folds: how much light each facet of the plant catches
+    const fc = this.sheet('foldSheet').getContext('2d');
+    fc.setTransform(1, 0, 0, 1, 0, 0);
+    fc.clearRect(0, 0, this.pw, this.ph);
+    v.at(fc, 0);
+    const foldKey = `${plant.sections.length}|${now ? now.step + ':' + now.progress : '-'}|${opening.length}`;
+    if (this.foldKey !== foldKey) {
+      this.foldKey = foldKey;
+      this.foldShapes = buildFlatPlant(plant, now, 'all');
+    }
+    drawFolds(fc, this.foldShapes);
+    const hf = this.sheet('headFoldSheet').getContext('2d');
+    hf.setTransform(1, 0, 0, 1, 0, 0);
+    hf.clearRect(0, 0, this.pw, this.ph);
+    if (opening.length) {
+      v.at(hf, 0);
+      for (const { section, node } of opening.slice(0, 3)) {
+        drawFolds(hf, buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all'));
+      }
+    }
   }
 
   /** A canvas of the screen's size, kept by name. */
@@ -715,6 +844,8 @@ export class RendererCollage {
     this.texLayer = tex();
     this.texNew = tex();
     this.texHeads = tex();
+    this.texFold = tex();
+    this.texHeadFold = tex();
     this.resize();
   }
 
@@ -771,6 +902,14 @@ export class RendererCollage {
     gl.bindTexture(gl.TEXTURE_2D, this.texHeads);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.headSheet);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uHeads'), 4);
+    gl.activeTexture(gl.TEXTURE5);
+    gl.bindTexture(gl.TEXTURE_2D, this.texFold);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.foldSheet);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uFold'), 5);
+    gl.activeTexture(gl.TEXTURE6);
+    gl.bindTexture(gl.TEXTURE_2D, this.texHeadFold);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.headFoldSheet);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uHeadFold'), 6);
     const hs = this.sketch.heads || [];
     const hv = new Float32Array(12), hp = new Float32Array(6);
     hs.slice(0, 3).forEach((h, i) => { hv.set([h.H[0], h.H[1], h.A[0], h.A[1]], i * 4); hp.set([h.phi, h.R], i * 2); });

@@ -22,9 +22,9 @@ import { drawPlantLive } from '../flat/paint.js';
 /**
  * How a section arrives. Paper does not grow: a cut-out film is made by laying
  * pieces down one at a time and photographing each. So a new section comes in
- * this many pieces, and each comes folded back over the point where it joins
- * the plant, showing the white of its back, and opens out flat, held a little
- * off the page until it is pressed down.
+ * this many pieces, and each comes folded in alongside the stem and swings
+ * open about the point where it joins, held a little off the page until it is
+ * pressed down.
  */
 const PIECES = 4;
 
@@ -315,17 +315,7 @@ void main() {
   // ---- the plant: cut out and stuck on top ----
   vec2 cp = cut(p);
   vec4 pc = plantAt(cp);
-  // usually cut close; here and there the scissors went wide and a sliver of
-  // the sheet it was cut from is still on it
-  float mw = max(0.0, vnoise(ap * 0.025 + 2.0) * 7.0 - 4.0);
-  float margin = 0.0;
-  if (pc.a < 0.5 && mw > 0.3) {
-    for (int i = 0; i < 8; i++) {
-      float b = float(i) * 0.7854;
-      if (plantAt(cp + vec2(cos(b), sin(b)) * mw).a > 0.5) margin = 1.0;
-    }
-  }
-  float held = max(pc.a, margin);
+  float held = pc.a;
   // its shadow: it stands off the page on a pad of glue, lit from the upper left
   float ps = 0.0, pt = 0.0, pn = 0.0;
   float lo = 1.0 + uLift * 2.6;
@@ -340,7 +330,6 @@ void main() {
   vec4 nw = texture(uNew, uvAt(cp));
   float newHere = step(0.5, nw.a);
   col *= 1.0 - (ps / 8.0 * 0.26 + pt / 8.0 * 0.22) * (1.0 - held);
-  col = mix(col, NEWS * grain(ap, 17.0), margin);
   if (pc.a > 0.5) {
     float pk = keyOf(pc.rgb);
     vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), ap, pk, 0.45, 1.0);
@@ -420,7 +409,7 @@ class Sketch extends Renderer2D {
     }
     this.resize();
     this.ensureWorld();
-    this.ensurePlant(plant, prev);
+    this.ensurePlant(plant, now);
     const v = this.view(cam, time);
     const s0 = v.s(0);
     this.anchor = [v.X(0, s0), v.Y(0, s0)];
@@ -467,40 +456,64 @@ class Sketch extends Renderer2D {
       world.colour = own;
     }
 
-    // the plant, but for the piece in hand
+    // The plant as it is now, but for the piece in hand. (Drawn as it is now,
+    // and not as it was a step ago, because a step ago it had a bud on the old
+    // tip, and that bud is not there any more.)
     const pc = this.sheet('plantSheet').getContext('2d');
     pc.setTransform(1, 0, 0, 1, 0, 0);
     pc.clearRect(0, 0, this.pw, this.ph);
     this.drawPlant(pc, v);
+    const colour = (ink, over) => this.plantColour(ink, over);
+    const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: 0 };
+    const grownNow = now ? buildFlatPlant(plant, now, 'growing') : null;
+    const grownBefore = now && prev.progress > 0 ? buildFlatPlant(plant, prev, 'growing') : null;
+    if (now) {
+      // the piece, where it will lie, cut out of the plant's sheet
+      const cc = this.sheet('cutSheet').getContext('2d');
+      cc.setTransform(1, 0, 0, 1, 0, 0);
+      cc.globalCompositeOperation = 'source-over';
+      cc.clearRect(0, 0, this.pw, this.ph);
+      v.at(cc, 0);
+      drawPlantLive(cc, grownNow, opts);
+      if (grownBefore) {
+        cc.globalCompositeOperation = 'destination-out';
+        drawPlantLive(cc, grownBefore, opts);
+        cc.globalCompositeOperation = 'source-over';
+      }
+      pc.setTransform(1, 0, 0, 1, 0, 0);
+      pc.globalCompositeOperation = 'destination-out';
+      pc.drawImage(this.cutSheet, 0, 0);
+      pc.globalCompositeOperation = 'source-over';
+    }
 
     // the piece in hand: this step's growth less the last step's, folded back
     // over its hinge and opening out. Its back is the white of the sheet.
     const nc = this.sheet('newSheet').getContext('2d');
     nc.setTransform(1, 0, 0, 1, 0, 0);
     nc.globalCompositeOperation = 'source-over';
-    nc.filter = 'none';
     nc.clearRect(0, 0, this.pw, this.ph);
     if (now) {
       v.at(nc, 0);
-      const fold = Math.cos(Math.PI * (1 - u));             // -1 folded flat back, 1 open
+      // Swung open about its joint, like a paper hinge: it starts folded in
+      // alongside the stem, swings out, goes a little past and settles back.
+      // A turn keeps the piece's shape, so it reads as the same piece moving.
       const hinge = this.hingeOf(plant, now, prev);
-      if (hinge) {
-        const [hx, hy, dx, dy] = hinge;
-        const g = fold - 1;
-        const a = 1 + g * dx * dx, b = g * dx * dy, d = 1 + g * dy * dy;
-        nc.transform(a, b, b, d, hx - (a * hx + b * hy), hy - (b * hx + d * hy));
+      if (hinge && u < 1) {
+        const [hx, hy] = hinge;
+        const c1 = 1.4;
+        const t = u - 1;
+        const eased = 1 + (c1 + 1) * t * t * t + c1 * t * t;
+        const side = (now.step * 7 + Math.round(now.progress * PIECES)) % 2 ? 1 : -1;
+        const ang = (1 - eased) * 2.4 * side;
+        const cs = Math.cos(ang), sn = Math.sin(ang);
+        nc.transform(cs, sn, -sn, cs, hx - (cs * hx - sn * hy), hy - (sn * hx + cs * hy));
       }
-      if (fold < 0) nc.filter = 'saturate(0.15) brightness(1.35)';
-      const colour = (ink, over) => this.plantColour(ink, over);
-      const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: 0 };
-      drawPlantLive(nc, buildFlatPlant(plant, now, 'growing'), opts);
-      if (prev.progress > 0) {
-        nc.filter = 'none';
+      drawPlantLive(nc, grownNow, opts);
+      if (grownBefore) {
         nc.globalCompositeOperation = 'destination-out';
-        drawPlantLive(nc, buildFlatPlant(plant, prev, 'growing'), opts);
+        drawPlantLive(nc, grownBefore, opts);
         nc.globalCompositeOperation = 'source-over';
       }
-      nc.filter = 'none';
     }
   }
 
@@ -513,9 +526,11 @@ class Sketch extends Renderer2D {
   }
 
   /**
-   * Where the new piece joins the plant and which way it runs from there: the
-   * tip as it was a step ago, and the direction to the tip as it is now (or,
-   * for a piece that is all head and no stem, the way the stem was going).
+   * Where the new piece joins the plant and which way the stem runs there: the
+   * tip as it was a step ago, and the stem's own direction at that point. The
+   * crease is across the stem, so the piece folds back over the stem it grows
+   * from. (Not the direction to the new tip: on a piece that bends, that puts
+   * the crease askew and the folded piece lands off to one side.)
    */
   hingeOf(plant, now, prev) {
     const section = plant.sections.find((sc) => sc.step === now.step);
@@ -526,10 +541,13 @@ class Sketch extends Renderer2D {
       for (const q of seg.points) { if (q.k <= kk) last = q; else break; }
       return last;
     };
-    const h = at(prev.progress * section.steps);
-    const e = at(now.progress * section.steps);
-    let dx = e.x - h.x;
-    let dy = e.y - h.y;
+    const kk = prev.progress * section.steps;
+    const h = at(kk);
+    const i = seg.points.indexOf(h);
+    const nx = seg.points[Math.min(seg.points.length - 1, i + 1)];
+    const px = seg.points[Math.max(0, i - 1)];
+    let dx = nx.x - px.x;
+    let dy = nx.y - px.y;
     if (Math.hypot(dx, dy) < 1e-3) {
       const n = seg.points.length;
       dx = seg.points[n - 1].x - seg.points[n - 2].x;

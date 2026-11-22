@@ -17,7 +17,7 @@
 
 import { Renderer2D } from '../flat/renderer2d.js';
 import { buildFlatPlant } from '../flat/plant2d.js';
-import { drawPlantLive } from '../flat/paint.js';
+import { drawPlantLive, patternAlpha } from '../flat/paint.js';
 
 /**
  * How a section arrives. Paper does not grow: a cut-out film is made by laying
@@ -38,6 +38,10 @@ uniform sampler2D uWorld;
 uniform sampler2D uPlant;
 uniform sampler2D uNew;    // the piece being laid down now
 uniform float uLift;       // how far off the page it still is, 0..1
+uniform sampler2D uHeads;  // the heads that are opening, drawn flat
+uniform vec4 uHead[3];     // each: the crease's point (xy) and direction (zw), CSS px
+uniform vec2 uHeadP[3];    // each: how far turned over (0 flat open, pi folded), and its reach
+uniform int uHeadN;
 uniform sampler2D uLayer;  // which layer: how fast it moves against the plant (r, g), far range (b)
 uniform vec2 uCentre;      // the one point on screen no layer's motion moves, CSS px
 uniform vec2 uRes;      // device pixels
@@ -354,6 +358,84 @@ void main() {
     col = printOn(paper(nrgb, nk, 1.0), ap, nk, 0.45, 1.0) * (1.0 + uLift * 0.06);
   }
 
+  // ---- heads opening: half on the page, half turning over above it ----
+  const vec3 LIGHT = vec3(-0.42, -0.52, 0.74);   // from the upper left, and in front
+  for (int i = 0; i < 3; i++) {
+    if (i >= uHeadN) break;
+    vec2 H = uHead[i].xy;
+    vec2 A = normalize(uHead[i].zw);
+    vec2 N = vec2(-A.y, A.x);
+    float ph = uHeadP[i].x, R = uHeadP[i].y;
+    float cph = cos(ph), sph = sin(ph);
+    const float D = 900.0;                       // how far the lens is, for the perspective
+    // Is there a point of the turning half over here? A point d out from the
+    // crease, turned by ph, is seen at d cos(ph), enlarged by its height.
+    // Run that backwards from this pixel.
+    vec2 rel = p - H;
+    float a1 = dot(rel, A), n1 = dot(rel, N);
+    float flap = 0.0;
+    vec3 flapCol = vec3(0.0);
+    float den = cph + n1 * sph / D;
+    if (abs(den) > 1e-3) {
+      float d = n1 / den;
+      if (d > 0.0 && d < R) {
+        float zf = 1.0 - d * sph / D;
+        vec2 src = H + A * a1 * zf + N * d;
+        vec4 hc = texture(uHeads, uvAt(src));
+        if (hc.a > 0.5) {
+          flap = 1.0;
+          // its own light: the normal turns with it
+          vec3 nrm = normalize(vec3(-N * sph, cph));
+          bool back = cph < 0.0;
+          if (back) nrm = -nrm;
+          float lit = (0.55 + 0.45 * max(dot(nrm, normalize(LIGHT)), 0.0)) / (0.55 + 0.45 * normalize(LIGHT).z);
+          vec3 rgb = hc.rgb / max(hc.a, 1e-3);
+          float hk = keyOf(rgb);
+          vec3 face = back ? CORE * grain(src - uAnchor, 31.0) : printOn(paper(rgb, hk, 1.0), src - uAnchor, hk, 0.45, 1.0);
+          flapCol = face * lit;
+        }
+      }
+    }
+    // the half that stays, where it is
+    float baseHit = 0.0;
+    vec3 baseCol = vec3(0.0);
+    if (n1 <= 0.5 && length(rel) < R * 1.3) {
+      vec4 hb = texture(uHeads, uvAt(p));
+      if (hb.a > 0.5) {
+        vec3 rgb = hb.rgb / max(hb.a, 1e-3);
+        float hk = keyOf(rgb);
+        baseHit = 1.0;
+        baseCol = printOn(paper(rgb, hk, 1.0), ap, hk, 0.45, 1.0);
+      }
+    }
+    // the shadow of the turning half, cast away from the light, longer the
+    // higher it is held
+    float sh = 0.0;
+    vec2 toward = -normalize(LIGHT).xy / normalize(LIGHT).z;
+    for (int k = 0; k < 10; k++) {
+      // spread over heights and a little to the side: a soft shadow, not bars
+      float fk = float(k);
+      float hgt = R * 0.45 * max(sph, 0.0) * (0.55 + 0.09 * fk);
+      vec2 q = p - toward * hgt + N * (fract(fk * 0.618) - 0.5) * (2.0 + hgt * 0.25);
+      vec2 r2 = q - H;
+      float n2 = dot(r2, N);
+      float dn = cph + n2 * sph / D;
+      if (abs(dn) > 1e-3) {
+        float d2 = n2 / dn;
+        if (d2 > 0.0 && d2 < R) {
+          vec2 s2 = H + A * dot(r2, A) * (1.0 - d2 * sph / D) + N * d2;
+          sh += step(0.5, texture(uHeads, uvAt(s2)).a);
+        }
+      }
+    }
+    sh = sh / 10.0 * (0.35 + 0.65 * max(sph, 0.0));
+    if (flap > 0.5) col = flapCol;
+    else {
+      if (baseHit > 0.5) col = baseCol;
+      col *= 1.0 - sh * 0.38;
+    }
+  }
+
   // the whole board photographed: glue cockle, and the window's fall-off
   vec2 uv = p * uPx / uRes;
   col *= 0.985 + 0.03 * (fbm(p * 0.006) - 0.5);
@@ -389,6 +471,33 @@ class Sketch extends Renderer2D {
   constructor(canvas) {
     super(canvas);
     this.line = 'rgba(0,0,0,0)';
+  }
+
+  /**
+   * The board does not have depth. Everything on it is glued to one sheet, so
+   * when the camera climbs or pulls back, all of it has to move together; a
+   * far range that slid more slowly than the ground in front of it was the
+   * picture coming apart into layers.
+   *
+   * So the eye never moves. It stays where it was at the start, at the floor
+   * and at zoom 1, and the camera's travel is done to the picture instead: a
+   * rise is a shift of the whole image (folded into the tilt, which every
+   * layer takes the same), and a zoom is a longer lens from the same spot,
+   * which scales every layer alike. In the plant's own plane this is exactly
+   * the camera it was, so the plant does not move at all.
+   */
+  lens(cam) {
+    const real = super.lens(cam);
+    const ref = super.lens({ x: cam.x, y: -1e9, zoom: 1 });
+    return {
+      F: ref.F * real.zoom,
+      zoom: real.zoom,
+      dist: ref.dist,
+      ex: real.ex,
+      ey: ref.ey,
+      lookY: real.lookY,
+      tilt: real.tilt - (real.ey - ref.ey) * real.zoom,
+    };
   }
 
   render(plant, cam, time, sections, reveal = null) {
@@ -487,7 +596,8 @@ class Sketch extends Renderer2D {
     pc.clearRect(0, 0, this.pw, this.ph);
     this.drawPlant(pc, v);
     const colour = (ink, over) => this.plantColour(ink, over);
-    const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: 0 };
+    // with the material's marks, as drawPlant has them, so a piece does not change when it is laid
+    const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: patternAlpha(s0 * this.dpr) };
     // The pieces are the stem's only. A head is built at a size that depends on
     // how far the stem has got, so the head now less the head a step ago is a
     // ring, and cutting that ring out of the plant left the head hollow.
@@ -526,51 +636,37 @@ class Sketch extends Renderer2D {
         drawPlantLive(nc, grownBefore, opts);
         nc.globalCompositeOperation = 'source-over';
       }
-      // and the heads that are opening, each unfolding on its own
-      for (const o of opening) this.unfoldHead(nc, v, plant, o, opts);
     }
-  }
 
-  /**
-   * A head is a symmetrical cut-out, and a symmetrical cut-out is made folded:
-   * so it arrives folded in half down its own middle, one half lying over the
-   * other with the white back of the sheet showing, and opens out flat. The
-   * half that moves is drawn squashed across the crease by how far open it is,
-   * and its back is drawn as the back of the paper until it passes upright.
-   */
-  unfoldHead(ctx, v, plant, { section, node, open }, opts) {
-    const shapes = buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all');
-    const e = open * open * (3 - 2 * open);
-    const c = Math.cos(Math.PI * (1 - e));                   // -1 folded over, 1 open
-    const sd = [Math.sin(node.angle), Math.cos(node.angle)];  // up the head
-    const sx = [-sd[1], sd[0]];                               // across it
-    const R = node.size * 4 + 40;
-    const H = [node.x, node.y];
-    const half = (sign) => {
-      ctx.beginPath();
-      ctx.moveTo(H[0] - sd[0] * R, H[1] - sd[1] * R);
-      ctx.lineTo(H[0] + sd[0] * R, H[1] + sd[1] * R);
-      ctx.lineTo(H[0] + sd[0] * R + sx[0] * R * sign, H[1] + sd[1] * R + sx[1] * R * sign);
-      ctx.lineTo(H[0] - sd[0] * R + sx[0] * R * sign, H[1] - sd[1] * R + sx[1] * R * sign);
-      ctx.closePath();
-    };
-    // the half that stays
-    ctx.save();
-    half(-1);
-    ctx.clip();
-    drawPlantLive(ctx, shapes, opts);
-    ctx.restore();
-    // the half that opens: scaled across the crease by c, about the crease
-    ctx.save();
-    const g = c - 1;
-    const a = 1 + g * sx[0] * sx[0], b = g * sx[0] * sx[1], d = 1 + g * sx[1] * sx[1];
-    ctx.transform(a, b, b, d, H[0] - (a * H[0] + b * H[1]), H[1] - (b * H[0] + d * H[1]));
-    half(1);
-    ctx.clip();
-    ctx.filter = c < 0 ? 'saturate(0.08) brightness(1.55)' : `brightness(${(0.78 + 0.22 * c).toFixed(3)})`;
-    drawPlantLive(ctx, shapes, opts);
-    ctx.filter = 'none';
-    ctx.restore();
+    // The heads that are opening, drawn flat on a sheet of their own: the
+    // shader folds them. Each is a symmetrical cut-out, and a symmetrical
+    // cut-out is made folded, so it arrives folded in half down its own
+    // middle and opens about that crease: one half stays on the page, the
+    // other turns over in three dimensions on top of it.
+    const hc = this.sheet('headSheet').getContext('2d');
+    hc.setTransform(1, 0, 0, 1, 0, 0);
+    hc.clearRect(0, 0, this.pw, this.ph);
+    this.heads = [];
+    if (opening.length) {
+      v.at(hc, 0);
+      for (const { section, node, open } of opening.slice(0, 3)) {
+        const shapes = buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all');
+        drawPlantLive(hc, shapes, opts);
+        // turned over flat at the start, upright half way, a little bounce as
+        // it lands: paper is light, and the air under it holds it up a moment.
+        // Held on twos, as a cut-out film is shot.
+        const q = Math.floor(open * 14) / 14;
+        const e = q * q * (3 - 2 * q);
+        const phi = Math.PI * (1 - Math.min(1, e / 0.86)) + 0.22 * Math.sin(Math.PI * Math.min(1, Math.max(0, (e - 0.86) / 0.14)));
+        const sd = [Math.sin(node.angle), Math.cos(node.angle)];
+        this.heads.push({
+          H: [v.X(node.x, s0), v.Y(node.y, s0)],
+          A: [sd[0], -sd[1]],
+          phi,
+          R: node.size * 1.7 * s0 + 8,
+        });
+      }
+    }
   }
 
   /** A canvas of the screen's size, kept by name. */
@@ -618,6 +714,7 @@ export class RendererCollage {
     this.texPlant = tex();
     this.texLayer = tex();
     this.texNew = tex();
+    this.texHeads = tex();
     this.resize();
   }
 
@@ -670,6 +767,16 @@ export class RendererCollage {
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uLayer'), 2);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uNew'), 3);
     gl.uniform1f(gl.getUniformLocation(this.prog, 'uLift'), this.sketch.lift || 0);
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, this.texHeads);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.headSheet);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uHeads'), 4);
+    const hs = this.sketch.heads || [];
+    const hv = new Float32Array(12), hp = new Float32Array(6);
+    hs.slice(0, 3).forEach((h, i) => { hv.set([h.H[0], h.H[1], h.A[0], h.A[1]], i * 4); hp.set([h.phi, h.R], i * 2); });
+    gl.uniform4fv(gl.getUniformLocation(this.prog, 'uHead'), hv);
+    gl.uniform2fv(gl.getUniformLocation(this.prog, 'uHeadP'), hp);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uHeadN'), Math.min(3, hs.length));
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uWorld'), 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uPlant'), 1);
     gl.uniform2f(gl.getUniformLocation(this.prog, 'uRes'), this.pw, this.ph);

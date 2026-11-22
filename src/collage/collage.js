@@ -22,10 +22,11 @@ import { drawPlantLive } from '../flat/paint.js';
 /**
  * How a section arrives. Paper does not grow: a cut-out film is made by laying
  * pieces down one at a time and photographing each. So a new section comes in
- * this many pieces, each whole the moment it appears, and each held off the
- * page at first, its shadow large and soft, then pressed down flat.
+ * this many pieces, and each comes folded back over the point where it joins
+ * the plant, showing the white of its back, and opens out flat, held a little
+ * off the page until it is pressed down.
  */
-const PIECES = 5;
+const PIECES = 4;
 
 const VS = `#version 300 es
 in vec2 aPos;
@@ -37,10 +38,11 @@ uniform sampler2D uWorld;
 uniform sampler2D uPlant;
 uniform sampler2D uNew;    // the piece being laid down now
 uniform float uLift;       // how far off the page it still is, 0..1
-uniform sampler2D uFar;    // where the far range shows: that layer is cut from the newspaper
+uniform sampler2D uLayer;  // which layer: how fast it moves against the plant (r, g), far range (b)
+uniform vec2 uCentre;      // the one point on screen no layer's motion moves, CSS px
 uniform vec2 uRes;      // device pixels
 uniform float uPx;      // device pixels to a CSS pixel
-uniform vec2 uAnchor;   // where the world's origin is on screen, CSS px: the paper is fixed to it
+uniform vec2 uAnchor;   // where the world's origin is on screen at the plant's depth, CSS px
 out vec4 outColour;
 
 float hash21(vec2 p) {
@@ -104,9 +106,17 @@ float keyOf(vec3 c) {
  */
 float tornness(vec2 a) { return smoothstep(0.50, 0.64, fbm(a * 0.0042 + 50.0)); }
 
+/** How fast the layer at p moves on screen, against the plant's own. */
+float speedAt(vec2 p) {
+  vec4 m = texture(uLayer, uvAt(p));
+  return (floor(m.r * 255.0 + 0.5) * 256.0 + floor(m.g * 255.0 + 0.5)) / 65535.0 * 4.0;
+}
+/** Where a layer moving at that speed has the world's origin: its paper is pinned there. */
+vec2 anchorOf(float k) { return uCentre + k * (uAnchor - uCentre); }
+
 /** Where a point is taken to lie, for deciding which piece it is on. */
-vec2 warp(vec2 p) {
-  vec2 a = p - uAnchor;
+vec2 warp(vec2 p, vec2 anc) {
+  vec2 a = p - anc;
   // scissors: a slow wander, never a ruled line
   vec2 w = (vec2(vnoise(a * 0.035 + 11.0), vnoise(a * 0.035 + 37.0)) - 0.5) * 2.6;
   // a tear: wanders a long way, and is ragged close to
@@ -228,10 +238,23 @@ const vec3 CORE = vec3(0.965, 0.955, 0.925);  // the inside of a sheet, where it
 
 void main() {
   vec2 p = vec2(gl_FragCoord.x, uRes.y - gl_FragCoord.y) / uPx;
-  vec2 a = p - uAnchor;                         // fixed to the world, not the glass
+  // Every layer's paper is pinned to that layer. The edges use a softened
+  // version, an average over the neighbourhood, so a tear does not jump where
+  // one layer gives way to another.
+  float kHere = speedAt(p);
+  float kSoft = 0.0;
+  for (int i = 0; i < 6; i++) {
+    float b = float(i) * 1.0472;
+    kSoft += speedAt(p + vec2(cos(b), sin(b)) * 9.0);
+  }
+  kSoft = (kSoft + kHere * 2.0) / 8.0;
+  vec2 ancW = anchorOf(kSoft);
+  vec2 a = p - anchorOf(kHere);                 // this piece's own paper
+  vec2 aw = p - ancW;                           // its edges
+  vec2 ap = p - uAnchor;                        // the plant's
 
   // ---- the world ----
-  vec3 wc = worldAt(warp(p));
+  vec3 wc = worldAt(warp(p, ancW));
   float wk = keyOf(wc);
   vec3 base = paper(wc, wk, 0.0);
 
@@ -244,11 +267,11 @@ void main() {
     for (int i = -1; i <= 1; i++) {
       vec2 d = normalize(vec2(float(i) * 0.8, 1.0));
       if (up > 98.0) {
-        vec3 c = worldAt(warp(p - d * fr));
+        vec3 c = worldAt(warp(p - d * fr, ancW));
         if (keyOf(c) != wk) { up = fr; upC = c; }
       }
       if (down > 98.0) {
-        vec3 c = worldAt(warp(p + d * fr));
+        vec3 c = worldAt(warp(p + d * fr, ancW));
         if (keyOf(c) != wk) { down = fr; downC = c; }
       }
     }
@@ -265,7 +288,7 @@ void main() {
   // every place cut from the same paper, which is how a collage is planned
   // rather than chanced. A little more of its colour is left in, so its lit
   // and shaded faces still read.
-  if (texture(uFar, uvAt(warp(p))).a > 0.5) {
+  if (texture(uLayer, uvAt(warp(p, ancW))).b > 0.5) {
     vec2 q = rot(a, (hash21(vec2(wk, 13.0)) - 0.5) * 0.5) + hash21(vec2(wk, 5.0)) * 900.0;
     vec3 page = mix(NEWS, base, 0.34) * grain(q, wk);
     col = mix(page, NEWS_INK, newsprint(q, wk) * 0.6);
@@ -281,20 +304,20 @@ void main() {
   // a hairline brighter, no more. Torn, the white core of the sheet shows, but
   // only where the tear ran the right way, in patches, never as a band of one
   // width, and its outer edge is loose fibre.
-  float tw = tornness(a);
+  float tw = tornness(aw);
   col *= 1.0 + 0.07 * (1.0 - smoothstep(0.6, 1.6, up)) * upK * (1.0 - tw);
-  float spots = smoothstep(0.38, 0.62, fbm(a * 0.05 + 21.0));
-  float w = (0.4 + 3.4 * pow(fbm(a * 0.09 + 7.0), 1.5)) * spots * tw * upK;
-  float fibre = (vnoise(a * vec2(2.4, 1.1)) - 0.5) * 1.4 + (vnoise(a * 5.0) - 0.5) * 0.6;
+  float spots = smoothstep(0.38, 0.62, fbm(aw * 0.05 + 21.0));
+  float w = (0.4 + 3.4 * pow(fbm(aw * 0.09 + 7.0), 1.5)) * spots * tw * upK;
+  float fibre = (vnoise(aw * vec2(2.4, 1.1)) - 0.5) * 1.4 + (vnoise(aw * 5.0) - 0.5) * 0.6;
   float core = 1.0 - smoothstep(w - 0.5, w + 0.3, up - 0.5 + fibre);
-  col = mix(col, mix(CORE, base, 0.12) * (0.95 + 0.05 * vnoise(a * 1.7)), core * step(0.15, w));
+  col = mix(col, mix(CORE, base, 0.12) * (0.95 + 0.05 * vnoise(aw * 1.7)), core * step(0.15, w));
 
   // ---- the plant: cut out and stuck on top ----
   vec2 cp = cut(p);
   vec4 pc = plantAt(cp);
   // usually cut close; here and there the scissors went wide and a sliver of
   // the sheet it was cut from is still on it
-  float mw = max(0.0, vnoise(a * 0.025 + 2.0) * 7.0 - 4.0);
+  float mw = max(0.0, vnoise(ap * 0.025 + 2.0) * 7.0 - 4.0);
   float margin = 0.0;
   if (pc.a < 0.5 && mw > 0.3) {
     for (int i = 0; i < 8; i++) {
@@ -312,15 +335,15 @@ void main() {
     ps += plantAt(cut(p + vec2(-3.4, -4.4) + o * 3.0)).a;
     pt += plantAt(cut(p + vec2(-1.2, -1.6) + o * 0.9)).a;
     // the piece in the hand: its shadow further off and softer the higher it is
-    if (uLift > 0.0) pn += texture(uNew, uvAt(cut(p + vec2(-3.4, -4.4) * lo + o * 3.0 * lo))).a;
+    pn += texture(uNew, uvAt(cut(p + vec2(-3.4, -4.4) * lo + o * 3.0 * lo))).a;
   }
-  float newHere = uLift > 0.0 ? step(0.5, texture(uNew, uvAt(cp)).a) : 0.0;
+  vec4 nw = texture(uNew, uvAt(cp));
+  float newHere = step(0.5, nw.a);
   col *= 1.0 - (ps / 8.0 * 0.26 + pt / 8.0 * 0.22) * (1.0 - held);
-  col *= 1.0 - (pn / 8.0) * 0.34 * uLift * (1.0 - held);
-  col = mix(col, NEWS * grain(a, 17.0), margin);
+  col = mix(col, NEWS * grain(ap, 17.0), margin);
   if (pc.a > 0.5) {
     float pk = keyOf(pc.rgb);
-    vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), a, pk, 0.45, 1.0);
+    vec3 pcol = printOn(paper(pc.rgb, pk, 1.0), ap, pk, 0.45, 1.0);
     // one cut piece over another: the upper one's edge throws a hairline
     float e = 0.0;
     for (int i = 0; i < 4; i++) {
@@ -332,13 +355,19 @@ void main() {
     // and the outer edge, facing the light, catches it along the paper's thickness
     float lit = 1.0 - plantAt(cut(p + vec2(-1.1, -1.1))).a;
     col = pcol * (1.0 + lit * 0.10);
-    // held up towards the lamp, the new piece is a touch brighter than the rest
-    col *= 1.0 + newHere * uLift * 0.06;
+  }
+  // The piece in hand, opening: over everything, its shadow cast on whatever
+  // it is held above, further off and softer the higher it is.
+  col *= 1.0 - (pn / 8.0) * 0.34 * (0.35 + 0.65 * uLift) * (1.0 - newHere);
+  if (newHere > 0.5) {
+    vec3 nrgb = nw.rgb / max(nw.a, 1e-3);
+    float nk = keyOf(nrgb);
+    col = printOn(paper(nrgb, nk, 1.0), ap, nk, 0.45, 1.0) * (1.0 + uLift * 0.06);
   }
 
   // the whole board photographed: glue cockle, and the window's fall-off
   vec2 uv = p * uPx / uRes;
-  col *= 0.985 + 0.03 * (fbm(a * 0.006) - 0.5);
+  col *= 0.985 + 0.03 * (fbm(p * 0.006) - 0.5);
   col *= 1.03 - 0.03 * uv.x - 0.05 * uv.y;
   col *= 1.0 - 0.16 * pow(clamp(length(uv - 0.5) * 1.25, 0.0, 1.0), 2.6);
   outColour = vec4(clamp(col, 0.0, 1.0), 1.0);
@@ -374,24 +403,28 @@ class Sketch extends Renderer2D {
   }
 
   render(plant, cam, time, sections, reveal = null) {
-    // laid down in pieces: the growth is held at whole steps, and what came in
-    // with the latest one is drawn again on a sheet of its own
+    // Laid down in pieces. The growth is held at whole steps: everything up to
+    // the last step is the plant, and the step's new piece is drawn on a sheet
+    // of its own, folded, and opened out about the point where it joins.
     this.lift = 0;
-    let before = null;
+    let now = null;
+    let prev = null;
+    let u = 1;
     if (reveal) {
       const f = reveal.progress * PIECES;
       const k = Math.min(PIECES, Math.floor(f) + 1);
-      const into = f - (k - 1);
-      this.lift = k >= PIECES && reveal.progress >= 1 ? 0 : 1 - Math.min(1, into / 0.55);
-      before = (k - 1) / PIECES;
-      reveal = { ...reveal, progress: k / PIECES };
+      u = reveal.progress >= 1 ? 1 : Math.min(1, (f - (k - 1)) / 0.75);
+      now = { ...reveal, progress: k / PIECES };
+      prev = { ...reveal, progress: (k - 1) / PIECES };
+      this.lift = 1 - u * u * (3 - 2 * u);
     }
     this.resize();
     this.ensureWorld();
-    this.ensurePlant(plant, reveal);
+    this.ensurePlant(plant, prev);
     const v = this.view(cam, time);
     const s0 = v.s(0);
     this.anchor = [v.X(0, s0), v.Y(0, s0)];
+    this.centre = [v.W / 2, v.H / 2 - v.tilt];
     const moving = this.moving.at(time * 0.001, plant, v);
     const ctx = this.ctx;
     // the world, everything in it, in its order: the plant is not in this sheet
@@ -403,49 +436,107 @@ class Sketch extends Renderer2D {
       if (!it.sky) it.draw(ctx, v);
     }
     while (m < moving.length) moving[m++].draw(ctx, v);
-    // where the far range is still to be seen: drawn in order, every range
-    // laid down and everything else rubbing out what it covers
-    if (!this.farSheet || this.farSheet.width !== this.pw || this.farSheet.height !== this.ph) {
-      this.farSheet = canvasOf(this.pw, this.ph);
+
+    // Which layer each pixel belongs to, as how fast that layer moves on the
+    // screen against the plant's own (red and green, sixteen bits), and
+    // whether it is the far range (blue). Every layer's paper is pinned to its
+    // own layer: the far hills' newsprint moves with the far hills, and the
+    // sky's does not move at all.
+    const lc = this.sheet('layerSheet').getContext('2d');
+    lc.setTransform(1, 0, 0, 1, 0, 0);
+    lc.fillStyle = 'rgb(0,0,0)';
+    lc.fillRect(0, 0, this.pw, this.ph);
+    const world = this.world;
+    const own = world.colour;
+    let cur = 'rgb(0,0,0)';
+    const enc = (z, far) => {
+      const q = Math.round(Math.min(0.9999, Math.max(0, (s0 ? v.s(z) / s0 : 0) / 4)) * 65535);
+      return `rgb(${q >> 8},${q & 255},${far ? 255 : 0})`;
+    };
+    world.colour = () => cur;
+    try {
+      m = 0;
+      for (const it of items) {
+        while (m < moving.length && moving[m].z < it.z) { cur = enc(moving[m].z, false); moving[m++].draw(lc, v); }
+        if (it.sky) continue;
+        cur = enc(it.z, it.kind === 'range');
+        it.draw(lc, v);
+      }
+      while (m < moving.length) { cur = enc(moving[m].z, false); moving[m++].draw(lc, v); }
+    } finally {
+      world.colour = own;
     }
-    const fc = this.farSheet.getContext('2d');
-    fc.setTransform(1, 0, 0, 1, 0, 0);
-    fc.globalCompositeOperation = 'source-over';
-    fc.clearRect(0, 0, this.pw, this.ph);
-    for (const it of items) {
-      if (it.sky) continue;
-      fc.globalCompositeOperation = it.kind === 'range' ? 'source-over' : 'destination-out';
-      it.draw(fc, v);
-    }
-    fc.globalCompositeOperation = 'destination-out';
-    for (const mv of moving) mv.draw(fc, v);
-    fc.globalCompositeOperation = 'source-over';
-    // and the plant on its own
-    if (!this.plantSheet || this.plantSheet.width !== this.pw || this.plantSheet.height !== this.ph) {
-      this.plantSheet = canvasOf(this.pw, this.ph);
-    }
-    const pc = this.plantSheet.getContext('2d');
+
+    // the plant, but for the piece in hand
+    const pc = this.sheet('plantSheet').getContext('2d');
     pc.setTransform(1, 0, 0, 1, 0, 0);
     pc.clearRect(0, 0, this.pw, this.ph);
     this.drawPlant(pc, v);
-    // the newest piece on its own: this step's growth less the last step's
-    if (!this.newSheet || this.newSheet.width !== this.pw || this.newSheet.height !== this.ph) {
-      this.newSheet = canvasOf(this.pw, this.ph);
-    }
-    const nc = this.newSheet.getContext('2d');
+
+    // the piece in hand: this step's growth less the last step's, folded back
+    // over its hinge and opening out. Its back is the white of the sheet.
+    const nc = this.sheet('newSheet').getContext('2d');
     nc.setTransform(1, 0, 0, 1, 0, 0);
     nc.globalCompositeOperation = 'source-over';
+    nc.filter = 'none';
     nc.clearRect(0, 0, this.pw, this.ph);
-    if (reveal && this.lift > 0) {
+    if (now) {
       v.at(nc, 0);
-      const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour: () => '#000', marks: 0 };
-      drawPlantLive(nc, buildFlatPlant(plant, reveal, 'growing'), opts);
-      if (before > 0) {
+      const fold = Math.cos(Math.PI * (1 - u));             // -1 folded flat back, 1 open
+      const hinge = this.hingeOf(plant, now, prev);
+      if (hinge) {
+        const [hx, hy, dx, dy] = hinge;
+        const g = fold - 1;
+        const a = 1 + g * dx * dx, b = g * dx * dy, d = 1 + g * dy * dy;
+        nc.transform(a, b, b, d, hx - (a * hx + b * hy), hy - (b * hx + d * hy));
+      }
+      if (fold < 0) nc.filter = 'saturate(0.15) brightness(1.35)';
+      const colour = (ink, over) => this.plantColour(ink, over);
+      const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: 0 };
+      drawPlantLive(nc, buildFlatPlant(plant, now, 'growing'), opts);
+      if (prev.progress > 0) {
+        nc.filter = 'none';
         nc.globalCompositeOperation = 'destination-out';
-        drawPlantLive(nc, buildFlatPlant(plant, { ...reveal, progress: before }, 'growing'), opts);
+        drawPlantLive(nc, buildFlatPlant(plant, prev, 'growing'), opts);
         nc.globalCompositeOperation = 'source-over';
       }
+      nc.filter = 'none';
     }
+  }
+
+  /** A canvas of the screen's size, kept by name. */
+  sheet(name) {
+    if (!this[name] || this[name].width !== this.pw || this[name].height !== this.ph) {
+      this[name] = canvasOf(this.pw, this.ph);
+    }
+    return this[name];
+  }
+
+  /**
+   * Where the new piece joins the plant and which way it runs from there: the
+   * tip as it was a step ago, and the direction to the tip as it is now (or,
+   * for a piece that is all head and no stem, the way the stem was going).
+   */
+  hingeOf(plant, now, prev) {
+    const section = plant.sections.find((sc) => sc.step === now.step);
+    const seg = section?.segments?.[0];
+    if (!seg || seg.points.length < 2) return null;
+    const at = (kk) => {
+      let last = seg.points[0];
+      for (const q of seg.points) { if (q.k <= kk) last = q; else break; }
+      return last;
+    };
+    const h = at(prev.progress * section.steps);
+    const e = at(now.progress * section.steps);
+    let dx = e.x - h.x;
+    let dy = e.y - h.y;
+    if (Math.hypot(dx, dy) < 1e-3) {
+      const n = seg.points.length;
+      dx = seg.points[n - 1].x - seg.points[n - 2].x;
+      dy = seg.points[n - 1].y - seg.points[n - 2].y;
+    }
+    const l = Math.hypot(dx, dy) || 1;
+    return [h.x, h.y, dx / l, dy / l];
   }
 }
 
@@ -479,7 +570,7 @@ export class RendererCollage {
     };
     this.texWorld = tex();
     this.texPlant = tex();
-    this.texFar = tex();
+    this.texLayer = tex();
     this.texNew = tex();
     this.resize();
   }
@@ -524,13 +615,13 @@ export class RendererCollage {
     gl.bindTexture(gl.TEXTURE_2D, this.texPlant);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.plantSheet);
     gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.texFar);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.farSheet);
+    gl.bindTexture(gl.TEXTURE_2D, this.texLayer);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.layerSheet);
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, this.texNew);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sketch.newSheet);
     gl.useProgram(this.prog);
-    gl.uniform1i(gl.getUniformLocation(this.prog, 'uFar'), 2);
+    gl.uniform1i(gl.getUniformLocation(this.prog, 'uLayer'), 2);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uNew'), 3);
     gl.uniform1f(gl.getUniformLocation(this.prog, 'uLift'), this.sketch.lift || 0);
     gl.uniform1i(gl.getUniformLocation(this.prog, 'uWorld'), 0);
@@ -539,6 +630,8 @@ export class RendererCollage {
     gl.uniform1f(gl.getUniformLocation(this.prog, 'uPx'), this.dpr);
     const an = this.sketch.anchor || [0, 0];
     gl.uniform2f(gl.getUniformLocation(this.prog, 'uAnchor'), an[0], an[1]);
+    const ce = this.sketch.centre || [0, 0];
+    gl.uniform2f(gl.getUniformLocation(this.prog, 'uCentre'), ce[0], ce[1]);
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quad);
     const a = gl.getAttribLocation(this.prog, 'aPos');
     gl.enableVertexAttribArray(a);

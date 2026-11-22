@@ -427,6 +427,11 @@ class Sketch extends Renderer2D {
     }
     this.resize();
     this.ensureWorld();
+    // The growing part is kept between frames by how far it has got, and that
+    // is now held at whole steps; but which heads it has changes within a step,
+    // as each finishes opening. Kept, a head that had just opened was missing
+    // until the next step.
+    if (reveal) this.plantKey = null;
     this.ensurePlant(plant, now);
     const v = this.view(cam, time);
     const s0 = v.s(0);
@@ -483,8 +488,12 @@ class Sketch extends Renderer2D {
     this.drawPlant(pc, v);
     const colour = (ink, over) => this.plantColour(ink, over);
     const opts = { heavy: 0, line: 0, lineColour: 'rgba(0,0,0,0)', colour, marks: 0 };
-    const grownNow = now ? buildFlatPlant(plant, now, 'growing') : null;
-    const grownBefore = now && prev.progress > 0 ? buildFlatPlant(plant, prev, 'growing') : null;
+    // The pieces are the stem's only. A head is built at a size that depends on
+    // how far the stem has got, so the head now less the head a step ago is a
+    // ring, and cutting that ring out of the plant left the head hollow.
+    const stems = now ? { ...plant, sections: plant.sections.map((sc) => (sc.step === now.step ? { ...sc, nodes: [] } : sc)) } : null;
+    const grownNow = now ? buildFlatPlant(stems, now, 'growing') : null;
+    const grownBefore = now && prev.progress > 0 ? buildFlatPlant(stems, prev, 'growing') : null;
     if (now) {
       // the piece, where it will lie, cut out of the plant's sheet
       const cc = this.sheet('cutSheet').getContext('2d');
@@ -581,6 +590,9 @@ export class RendererCollage {
     if (!gl) throw new Error('This browser could not open WebGL 2.');
     this.gl = gl;
     this.gpuName = 'WebGL 2 (collage)';
+    // how long a section takes to arrive: slower than the other looks, so a
+    // piece can be seen to be laid and a head to open
+    this.growMs = 3200;
     this.renderScale = 1;
     const hidden = document.createElement('canvas');
     hidden.className = 'stage';

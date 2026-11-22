@@ -591,7 +591,8 @@ function draw(now) {
   // moved, because the camera now follows it.
   progress = 1;
   if (growing) {
-    progress = clamp((now - growing.start) / GROW_MS, 0, 1);
+    // (a look may take longer over it: a cut-out is laid down by hand)
+    progress = clamp((now - growing.start) / (renderer?.growMs || GROW_MS), 0, 1);
     // ease out, so a section arrives rather than stops
     progress = 1 - Math.pow(1 - progress, 2.2);
   }

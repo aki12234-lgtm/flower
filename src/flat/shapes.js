@@ -63,6 +63,11 @@ export class Shapes {
       pts.push({ x: p.x, y: p.y, l: Math.max(p.r * 0.25, l), r: Math.max(p.r * 0.25, r), arc,
         ink: this.pick(colourAt(i, p)) });
     }
+    if (this.whole) {
+      const ink = pts[Math.floor(pts.length * 0.6)].ink;
+      this.add({ type: 'band', pts: pts.map((p) => ({ ...p, ink })), ink, pat, z });
+      return;
+    }
     let start = 0;
     for (let i = 1; i <= pts.length; i++) {
       if (i < pts.length && pts[i].ink === pts[start].ink) continue;
@@ -142,6 +147,14 @@ export class Shapes {
     for (let i = 0; i <= R; i++) {
       const u = i / R;
       rows.push({ a: at(u, -1), b: at(u, 1), ink: this.pick(colourAt(Math.min(1, u + 0.5 / R))) });
+    }
+    // a look made of one material makes a petal in one piece, of the colour
+    // most of it is, rather than in a strip per shade
+    if (this.whole) {
+      const pts = rows.map((r) => ({ x: r.a[0], y: r.a[1] }));
+      for (let k = R; k >= 0; k--) pts.push({ x: rows[k].b[0], y: rows[k].b[1] });
+      this.add({ type: 'poly', pts, ink: this.pick(colourAt(0.7)), pat, z });
+      return;
     }
     // one polygon per run of rows printed in one ink, the later run on top
     let start = 0;

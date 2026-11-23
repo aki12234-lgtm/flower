@@ -32,6 +32,14 @@ export class MeshBuilder {
 
   tri(a, b, c) { this.indices.push(a, b, c); }
 
+  /**
+   * Stamp one number into uv.y of every vertex from `from` on: one value for one
+   * creature, so whatever the shader does to move it moves all of it alike.
+   */
+  stamp(from, v) {
+    for (let i = from; i < this.vertexCount; i++) this.verts[i * FLOATS_PER_VERTEX + 14] = v;
+  }
+
   quad(a, b, c, d) { this.indices.push(a, b, c, a, c, d); }
 
   build() {
@@ -63,8 +71,34 @@ const cross = (a, b) => [
  * spinning about its own axis when the path turns — the twist shows up as a
  * crawling highlight and is very obvious on a shiny material.
  */
+/**
+ * How finely curved things are cut, as a multiple. The 3D look raises it while
+ * its plant is built, since that plant is seen close and in full light, where a
+ * petal of a dozen quads shows its straight edges.
+ */
+let DETAIL = 1;
+export function setDetail(k) { DETAIL = k; }
+const fine = (n) => Math.max(n, Math.round(n * DETAIL));
+// A floor under the round things, for a world that has to look round: below
+// enough segments a sphere is a gem and a tube is a pencil. How many is enough
+// depends on how big the thing is on screen, so the floor is set by its size
+// over its distance from where the camera usually stands; a pebble a long way
+// off is left as it was.
+let ROUND = null;
+export function setRound(r) { ROUND = r; }
+const EYE = [0, 600, 3000];
+function onScreen(x, y, z, r) {
+  const d = Math.max(600, Math.hypot(x - EYE[0], y - EYE[1], z - EYE[2]));
+  return (r * 2500) / d;                              // its radius, in pixels
+}
+
 export function tube(mb, path, sides, albedoAt, paramsAt, dispAt) {
   if (path.length < 2) return;
+  if (ROUND) {
+    const p0 = path[0];
+    const px = onScreen(p0.x, p0.y, p0.z, p0.r || 0);
+    sides = Math.max(sides, Math.min(ROUND.sides, Math.round(px * 0.9)));
+  }
   const rings = [];
 
   let prevN = null;
@@ -176,7 +210,29 @@ export function shard(mb, cx, cy, cz, r, jitter, albedo, params) {
   }
 }
 
+/**
+ * A sphere whose displacement is given the world position of each point.
+ *
+ * sphere() hands its displacement the angles (theta, phi, r), which suits the
+ * plant's own relief. The world's callers were all written as if they got a
+ * position, and with angles the fish and the animals subtracted a polar angle
+ * from a world x of thousands: the radius went hugely negative and each one
+ * turned inside out into a ball the size of a house.
+ */
+export function sphereAt(mb, cx, cy, cz, r, rows, cols, albedo, params, disp) {
+  return sphere(mb, cx, cy, cz, r, rows, cols, albedo, params, disp && ((th, phi) => {
+    const s = Math.sin(phi);
+    return disp(cx + s * Math.cos(th) * r, cy + Math.cos(phi) * r, cz + s * Math.sin(th) * r);
+  }));
+}
+
 export function sphere(mb, cx, cy, cz, r, rows, cols, albedo, params, dispAt) {
+  rows = fine(rows); cols = fine(cols);
+  if (ROUND) {
+    const px = onScreen(cx, cy, cz, r);
+    cols = Math.max(cols, Math.min(ROUND.cols, Math.round(px * 0.45)));
+    rows = Math.max(rows, Math.min(ROUND.rows, Math.round(px * 0.28)));
+  }
   const base = mb.vertexCount;
   for (let i = 0; i <= rows; i++) {
     const phi = (i / rows) * Math.PI;
@@ -211,8 +267,9 @@ export function blade(mb, opts) {
   const {
     origin, dir, side, len, width, cup = 0.5, sweep = 0.35,
     tipTaper = 1, albedo, baseAlbedo = null, edgeAlbedo = null,
-    params, rows = 10, cols = 6, ripple = 0,
+    params, rows: rows0 = 10, cols: cols0 = 6, ripple = 0,
   } = opts;
+  const rows = fine(rows0), cols = fine(cols0);
   const up = norm(cross(dir, side));
   const base = mb.vertexCount;
 

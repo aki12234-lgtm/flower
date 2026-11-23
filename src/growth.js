@@ -26,7 +26,9 @@ export const NODE_KINDS = [
   'lily', 'pansy', 'allium', 'drumstick', 'cactus',
   // foliage
   'leaf', 'frond', 'needle', 'fan', 'heart', 'lobed', 'strap', 'trefoil',
-  'saw', 'arrow',
+  'saw',
+  // ('arrow' is gone: in the looks made of a material it never read as a leaf. Its
+  // drawing is kept, so a plant saved with one still shows it.)
 ];
 
 // ------------------------------------------------------------- directions --
@@ -339,6 +341,53 @@ function partFits(ground, n, boxes, tip, stepLen) {
   return ahead(0, stepLen) || ahead(1, stepLen) || ahead(-1, stepLen);
 }
 
+/** How close a stem may come back to lie beside another, in units of a step. */
+export const STEM_CLEAR = 1;
+
+/** Would the step end, or pass its middle, nearer than STEM_CLEAR to a stem other than the one just grown? */
+function hugsStem(stems, tip, x1, y1, stepLen) {
+  const clear = STEM_CLEAR * stepLen;
+  // the last two steps it took are where it is coming from, and a sharp
+  // turn may come back close to those; the few before them it keeps a little
+  // further from than from anything else, so a turn cannot come round into a U
+  const recent = (tip.arc || 0) - stepLen * 1.5;
+  const own = (tip.arc || 0) - stepLen * 4.5;
+  const OWN_CLEAR = 1.2;
+  const mx = (tip.x + x1) / 2, my = (tip.y + y1) / 2;
+  const dist = (st, px, py) => {
+    const dx = st.x1 - st.x0, dy = st.y1 - st.y0;
+    const t = Math.max(0, Math.min(1, ((px - st.x0) * dx + (py - st.y0) * dy) / (dx * dx + dy * dy || 1)));
+    return Math.hypot(st.x0 + dx * t - px, st.y0 + dy * t - py);
+  };
+  for (const st of stems) {
+    if (st.tip === tip.id && st.arc >= recent) continue;
+    if (Math.hypot(st.x0 - tip.x, st.y0 - tip.y) < 1e-3 || Math.hypot(st.x1 - tip.x, st.y1 - tip.y) < 1e-3) continue;
+    // for its first step, the pieces it is joined to where it set out
+    if (tip.ox !== undefined && (tip.arc || 0) < stepLen * 0.5
+      && Math.min(Math.hypot(st.x0 - tip.ox, st.y0 - tip.oy), Math.hypot(st.x1 - tip.ox, st.y1 - tip.oy)) < stepLen * 0.35) continue;
+    const c = st.tip === tip.id && st.arc >= own ? clear * OWN_CLEAR : clear;
+    if (Math.min(st.x0, st.x1) > Math.max(tip.x, x1) + c || Math.max(st.x0, st.x1) < Math.min(tip.x, x1) - c
+      || Math.min(st.y0, st.y1) > Math.max(tip.y, y1) + c || Math.max(st.y0, st.y1) < Math.min(tip.y, y1) - c) continue;
+    if (dist(st, x1, y1) < c || dist(st, mx, my) < c * 0.8) return true;
+  }
+  return false;
+}
+
+/** Does the step from (x0, y0) to (x1, y1) pass through any stem piece (not merely touch one)? */
+function crossesStem(stems, x0, y0, x1, y1) {
+  const side = (ax, ay, bx, by, px, py) => {
+    const c = (bx - ax) * (py - ay) - (by - ay) * (px - ax);
+    return Math.abs(c) < 1e-6 ? 0 : Math.sign(c);
+  };
+  const lo = Math.min(x0, x1), hi = Math.max(x0, x1), bo = Math.min(y0, y1), to = Math.max(y0, y1);
+  for (const st of stems) {
+    if (Math.max(st.x0, st.x1) < lo || Math.min(st.x0, st.x1) > hi || Math.max(st.y0, st.y1) < bo || Math.min(st.y0, st.y1) > to) continue;
+    if (side(x0, y0, x1, y1, st.x0, st.y0) * side(x0, y0, x1, y1, st.x1, st.y1) < 0
+      && side(st.x0, st.y0, st.x1, st.y1, x0, y0) * side(st.x0, st.y0, st.x1, st.y1, x1, y1) < 0) return true;
+  }
+  return false;
+}
+
 /**
  * Would a step in this direction cross ground some *other* member stands in?
  *
@@ -356,6 +405,18 @@ function cellTaken(occupied, tip, dir, stepLen, allowed = true, ground = null) {
   const x1 = tip.x + DIRS[dir].x * stepLen;
   const y1 = tip.y + DIRS[dir].y * stepLen;
   if (ground && stepTouchesPart(ground, tip.x, tip.y, x1, y1, tip.width ?? 4)) return true;
+  // The trail lets a tip past ground it stands in, and a stem started from
+  // the side of another is let off a disc round the joint. At a bend in the
+  // old stem that disc covers its other arm too, and the first step out went
+  // straight across it. So whatever the grid lets through, a step that truly
+  // crosses a stem already there is refused: touching at the joint is not a
+  // crossing, going through is.
+  if (ground && crossesStem(ground.stems, tip.x, tip.y, x1, y1)) return true;
+  // Nor may it run back alongside a stem: a hairpin, a stem come back round
+  // to lie against another, reads as a knot as surely as a crossing does.
+  // The stem it has just come along does not count, and nor do the pieces it
+  // is joined to where it leaves another stem.
+  if (ground && ground.stepLen && hugsStem(ground.stems, tip, x1, y1, ground.stepLen)) return true;
   if (!allowed) return false;
   const n = Math.max(1, Math.ceil(stepLen / (CELL * 0.6)));
   for (let i = 1; i <= n; i++) {
@@ -593,7 +654,11 @@ export function growSection(plant, params, rng, meta) {
   const stepLen = params.reach / params.steps;
   const occupied = new Set();
   // the parts, which nothing grows through, and the stems they keep clear of
-  const parts = { parts: [], stems: [] };
+  const parts = { parts: [], stems: [], stepLen };
+  // how far along its own stem each piece ends, so a tip can tell the stem it
+  // has just come along from one it has come back round to
+  const arcOf = new Map();
+  const originOf = new Map();
   for (const sec of plant.sections) {
     for (const seg of sec.segments) {
       for (let i = 0; i < seg.points.length; i++) {
@@ -601,7 +666,10 @@ export function growSection(plant, params, rng, meta) {
         if (i > 0) {
           const q = seg.points[i - 1];
           markPath(occupied, q.x, q.y, p.x, p.y, (p.w + q.w) * 0.5);
-          parts.stems.push({ x0: q.x, y0: q.y, x1: p.x, y1: p.y, r: stemReach(Math.max(p.w, q.w)) });
+          if (!originOf.has(seg.tipId)) originOf.set(seg.tipId, q);
+          const arc = (arcOf.get(seg.tipId) || 0) + Math.hypot(p.x - q.x, p.y - q.y);
+          arcOf.set(seg.tipId, arc);
+          parts.stems.push({ x0: q.x, y0: q.y, x1: p.x, y1: p.y, r: stemReach(Math.max(p.w, q.w)), tip: seg.tipId, arc });
         } else {
           occupied.add(cellKey(p.x, p.y));
         }
@@ -635,7 +703,12 @@ export function growSection(plant, params, rng, meta) {
   // and this rule forbade exactly that. Strained plants stopped recovering and
   // died instead — the balance had been tuned around a route that no longer
   // existed. Below about two thirds health the rule lifts, which also reads
-  // right: a struggling plant is the one that grows through itself.
+  // right: a struggling plant is the one that grows over itself.
+  //
+  // Over, never through: what lifts is the ground rule, so it can crowd back
+  // across its own mass. A step that cuts through a stem is refused all the
+  // same (cellTaken), because a stem crossing a stem reads as a knot, not as
+  // a plant in trouble — and closing that cost no more plants than before.
   const tidy = params.health > 0.66;
 
   const alive = plant.tips.filter((t) => t.alive);
@@ -689,6 +762,13 @@ export function growSection(plant, params, rng, meta) {
       // a stem just started from the side of another keeps the joint it left by
       for (const k of prior) t.trail.add(k);
     }
+  }
+
+  for (const t of active) {
+    t.arc = arcOf.get(t.id) || 0;
+    // where it set out from: the joint it shares with whatever it grew out of
+    const o = originOf.get(t.id) || { x: t.x, y: t.y };
+    t.ox = o.x; t.oy = o.y;
   }
 
   // Each tip gets a segment for this turn.
@@ -826,7 +906,8 @@ export function growSection(plant, params, rng, meta) {
       tip.y += DIRS[tip.dir].y * stepLen;
       tip.z = Math.max(-Z_LIMIT, Math.min(Z_LIMIT, (tip.z ?? 0) + (tip.zSlope ?? 0) * stepLen));
       markPath(occupied, fromX, fromY, tip.x, tip.y, tip.width);
-      parts.stems.push({ x0: fromX, y0: fromY, x1: tip.x, y1: tip.y, r: stemReach(tip.width) });
+      tip.arc = (tip.arc || 0) + stepLen;
+      parts.stems.push({ x0: fromX, y0: fromY, x1: tip.x, y1: tip.y, r: stemReach(tip.width), tip: tip.id, arc: tip.arc });
       markPath(tip.trail, fromX, fromY, tip.x, tip.y, tip.width);
       tip.width = Math.max(0.6, tip.width * params.taper);
       tip.age++;
@@ -998,7 +1079,6 @@ function pickNodeKind(rng, params, values, plant) {
     spider: 0.18 + values.intensity * 1.2 + values.openness * 0.6 - values.attachment * 0.4,
     burr: 0.16 + values.intensity * 1.0 + values.attachment * 0.7 - values.openness * 0.5,
     saw: 0.18 + values.intensity * 0.9 + (1 - values.attachment) * 0.6,
-    arrow: 0.16 + values.intensity * 0.8 + values.order * 0.7,
   };
   // Clusters and spines, much rarer. Heads of many small florets, needles,
   // burrs and the like read as clutter on a plant this spare — a knot of small

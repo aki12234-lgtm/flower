@@ -66,8 +66,13 @@ function carryClear(shapes, p) {
  * `which`, as for buildPlant: 'all', 'settled' (every section but the one
  * growing) or 'growing' (that one alone, as far as it has got).
  */
-export function buildFlatPlant(plant, reveal = null, which = 'all') {
-  const shapes = new Shapes((rgb) => inkFor(rgb, PLANT_SET, true));
+export function buildFlatPlant(plant, reveal = null, which = 'all', opts = {}) {
+  // `opts.pick` keeps a colour as something other than a print ink (the looks
+  // made of a material take the true colour); `opts.stems: false` leaves the
+  // stems out for a look that makes its own, and keeps every head and bud.
+  const { pick = (rgb) => inkFor(rgb, PLANT_SET, true), stems = true, whole = false } = opts;
+  const shapes = new Shapes(pick);
+  shapes.whole = whole;
   const flowerHue = flowerHueFor(plant);
   const live = new Map((plant.tips || []).filter((t) => t.alive !== false).map((t) => [t.id, t]));
 
@@ -105,14 +110,14 @@ export function buildFlatPlant(plant, reveal = null, which = 'all') {
         const flare = isBranch ? 1 + 0.85 * Math.exp(-d / 13) : 1;
         return { x: p.x, y: p.y, r: p.w * 0.5 * STEM_DRAWN * flare * (1 + nodeAt[i] * 0.22) };
       });
-      shapes.band(path, (i, p) => {
+      if (stems) shapes.band(path, (i, p) => {
         const nd = nodeAt[i];
         const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;
         const k = 1 + along * 0.20 - nd * 0.14;
         return [Math.min(1, rgb[0] * k + nd * 0.10), rgb[1] * k * (1 - nd * 0.16), rgb[2] * k * (1 - nd * 0.10)];
       }, pat, segZ, relief);
-      if (isBranch) shapes.disc(p0.x, p0.y, path[0].r * 1.06, rgb, pat, segZ, relief);
-      for (const e of [path[0], path[path.length - 1]]) shapes.disc(e.x, e.y, e.r, rgb, pat, segZ, relief);
+      if (stems && isBranch) shapes.disc(p0.x, p0.y, path[0].r * 1.06, rgb, pat, segZ, relief);
+      if (stems) for (const e of [path[0], path[path.length - 1]]) shapes.disc(e.x, e.y, e.r, rgb, pat, segZ, relief);
 
       // the bud on the growing tip: stem coloured below, flower coloured above
       const tipNow = live.get(seg.tipId);
@@ -572,4 +577,28 @@ function buildNode(shapes, n, ctx) {
     shapes.disc(head[0] + sideDir[0] * ox + stemDir[0] * oy, head[1] + sideDir[1] * ox + stemDir[1] * oy,
       f.sphere.r * 1.1, eye, plain, ze);
   }
+}
+
+/**
+ * The plant's heads — every flower, fruit, leaf and bud, kind by kind, exactly
+ * as the flat and 3D looks build them — for a look that makes its own stems
+ * out of its own material. Colours are the true ones, not print inks, as
+ * `{ rgb }`; one object per colour, so a band of one colour stays one band.
+ * `sizeOf(node)`, when given, is the size to build each head at: a look whose
+ * grain is coarse (a stitch, a thumbprint) keeps its heads big enough to
+ * still read as their kind.
+ */
+export function buildFlatHeads(plant, reveal = null, sizeOf = null) {
+  const seen = new Map();
+  const pick = (rgb) => {
+    const key = rgb.map((q) => Math.round(q * 64)).join(',');
+    let c = seen.get(key);
+    if (!c) seen.set(key, (c = { rgb: rgb.slice(0, 3) }));
+    return c;
+  };
+  const p = sizeOf ? {
+    ...plant,
+    sections: plant.sections.map((s) => ({ ...s, nodes: s.nodes.map((n) => ({ ...n, size: sizeOf(n) })) })),
+  } : plant;
+  return buildFlatPlant(p, reveal, 'all', { pick, stems: false, whole: true });
 }

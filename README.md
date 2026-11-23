@@ -33,6 +33,31 @@ it and coming back costs nothing. v3 and v4 are one game with two renderers, so
 they keep one plant between them: going across shows the same plant drawn the
 other way.
 
+### Looks: how the picture is drawn is the player's choice
+
+The chip in the top left corner changes the look of the whole scene, at any
+moment, without touching the plant, the place or the camera (`src/looks.js`).
+Nothing else ever changes it.
+
+| | |
+|---|---|
+| **3D** | the lit renderer as it stood in v1 (`versions/v1`, frozen), drawing the current plant |
+| **Illustrated** | v3's print: the shade side in solid black, a fine ultramarine line (v4's 2D Flat was the same picture, and is folded into it) |
+| **ASCII** | the world in small type, the plant in large: both are the questions asked and the answers given |
+| **Crochet** | one piece of knitting with the picture and the plant worked into it (`src/yarn/fabric.js`): real stocking stitch, loops through loops, every stitch relief under a light |
+| **Riso** | the lit 3D scene taken apart into three drums, blue, fluorescent pink and yellow, each screened into dots, slipped off register and laid on cream paper (`src/riso/press.js`) |
+| **Clay** | a stop-motion plasticine set in real 3D (`src/clay/clay.js`): its own set of rounded solids in the place's colours and the plant as hand-rolled coils, pressed petals and beads, each ray-traced exactly, lit by a soft lamp with shadows and occlusion, seen through a lens with depth of field; moved a frame at a time |
+
+ASCII and Crochet are `src/flat/crafted.js`. A look there is a material, not a
+filter: plant and world are the same stuff and still told apart (by the size of
+the letter, by the weight of the stitch), and growth happens the way the stuff
+is made, a letter or a stitch at a time. The world is the flat renderer's own,
+drawn small and set on a grid fixed to the ground.
+
+The drawn states are out of the pool a plant's material is chosen from, so a
+plant no longer turns into a picture of itself on a roll; what it is made of
+still follows the answers.
+
 ### v4: the illustrated look, drawn flat
 
 v3 is printed from a 3D renderer: real geometry, every surface matched to the

@@ -1293,6 +1293,18 @@ precision highp float;
 in vec2 aPos; out vec2 vUv;
 void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
+/**
+ * The illustrated look's inking (see printed() below): the world's shade side
+ * laid down in solid black, as a comic is inked, and a fine line — the heavy
+ * one competed with the black for the same job. The line is in ultramarine,
+ * so it reads as a second ink over the black rather than the edge of it.
+ */
+const PRINT_INK = { shadeBlack: 1, line: 1.2, plantLine: 0.7, lineColour: '#2b3fc4' };
+/** The line's colour, linear, as GLSL: its own when given, else the ink the shade is laid in. */
+const LINE_INK_GLSL = PRINT_INK.lineColour
+  ? `vec3(${[1, 3, 5].map((i) => Math.pow(parseInt(PRINT_INK.lineColour.slice(i, i + 2), 16) / 255, 2.2).toFixed(4)).join(', ')})`
+  : 'uInk';
+
 const POST_FS = `#version 300 es
 precision highp float;
 ${OVERPRINT}
@@ -1377,13 +1389,18 @@ float nearness(ivec2 p) {
  * where two shapes lie at one depth, on the paler of them. Drawn on both
  * sides, a stem thinner than two lines was nothing but line — a black cord.
  */
+// How the print is inked: the shade side laid down in the line's own black
+// rather than a darker pass of each colour, and how wide the line is.
+const float SHADE_BLACK = ${PRINT_INK.shadeBlack.toFixed(3)};
+const float LINE_REACH = ${PRINT_INK.line.toFixed(3)};      // device pixels per CSS pixel the line reaches out
+const float PLANT_REACH = ${PRINT_INK.plantLine.toFixed(3)};    // and how much further round the plant
 vec3 printed() {
   vec2 fc = gl_FragCoord.xy;
   vec2 wob = vec2(vnoise(fc * 0.045 + 3.1), vnoise(fc.yx * 0.045 + 7.7)) - 0.5;
   ivec2 at = ivec2(fc + wob * 2.2 * uScale);
   // lookups at two reaches round the pixel: the far ring sets how wide a line
   // is, the near one keeps a shape thinner than that from slipping between
-  int r = int(max(1.0, floor(2.0 * uScale + 0.5)));
+  int r = int(max(1.0, floor(LINE_REACH * uScale + 0.5)));
   int rd = max(1, int(float(r) * 0.7 + 0.5));
   int rh = max(1, r / 2);
   vec3 cc = inkAt(at);
@@ -1413,7 +1430,7 @@ vec3 printed() {
   // else: printed in the same loud inks as a forest of painted trunks, it was
   // one more trunk among them. A third ring, further out, that only the plant
   // in front of this pixel counts in.
-  int rp = r + max(1, int(1.2 * uScale + 0.5));
+  int rp = r + max(1, int(PLANT_REACH * uScale + 0.5));
   int rpd = max(1, int(float(rp) * 0.7 + 0.5));
   if (!plantAt(at)) {
     for (int k = 0; k < 8; k++) {
@@ -1422,7 +1439,15 @@ vec3 printed() {
       if (plantAt(at + o) && nearness(at + o) > nc * 1.015) line = 1.0;
     }
   }
-  vec3 col = pow(mix(sceneAt(at), uInk, line), vec3(1.0 / 2.2));
+  vec3 base = sceneAt(at);
+  // the world's shade side, read back from the second pass the scene laid
+  // over it (the plant's second pass is its pattern, and stays as it is)
+  if (SHADE_BLACK > 0.0 && !plantAt(at)) {
+    float a = texelFetch(uScene, clamp(at, ivec2(0), textureSize(uScene, 0) - 1), 0).a * 255.0;
+    float over = clamp((a - floor(a + 0.05)) / OVER_SLOT, 0.0, 1.0);
+    base = mix(base, uInk, smoothstep(0.10, 0.30, over) * SHADE_BLACK);
+  }
+  vec3 col = pow(mix(base, ${LINE_INK_GLSL}, line), vec3(1.0 / 2.2));
   return col;
 }
 

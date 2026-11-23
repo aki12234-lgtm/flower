@@ -52,14 +52,14 @@ vec3 stirred(vec3 p, vec2 uv, int id) {
     p.x += sin(uSceneTime * 0.019 + p.z * 0.00004) * 900.0;
     p.y += sin(uSceneTime * 0.031 + p.x * 0.00006) * 90.0;
   } else if (id == 29) {                           // birds: flying, and flapping
-    float ph = wob(floor(p.xz * 0.0012)) * 6.2832;
+    float ph = uv.y * 6.2832;                      // one per flock, stamped on it
     p.x += sin(uSceneTime * 0.17 + ph) * 1500.0;
     p.z += cos(uSceneTime * 0.17 + ph) * 1500.0;
     p.y += sin(uSceneTime * 0.4 + ph) * 90.0;
     // uv.x runs out along the wing from the body, so the tip travels furthest
     p.y += sin(uSceneTime * 6.5 + ph) * uv.x * 0.5;
   } else if (id == 30) {                           // fish, holding station
-    float ph = wob(floor(p.xz * 0.004)) * 6.2832;
+    float ph = uv.y * 6.2832;                      // one per school
     p.x += sin(uSceneTime * 0.5 + ph) * 90.0;
     p.z += cos(uSceneTime * 0.37 + ph) * 90.0;
     p.y += sin(uSceneTime * 0.8 + ph) * 14.0;
@@ -93,6 +93,7 @@ uniform sampler2D uShadow;
 uniform float uWorldIdiom;      // 0 = the world as it is; otherwise the manner it has taken on
 uniform float uUnderwater;      // 1 when the camera is in the sea rather than above it
 uniform float uGloom;           // 1 in a cave: no light but what falls through the break
+uniform float uFacet;           // 1: the 3D look's plant cut in facets; 2: everything
 uniform float uRecede;          // 1 to hold the world back behind the plant; 0 to see it raw
 out vec4 outColour;
 
@@ -139,6 +140,9 @@ float fbm(vec2 p) {
 
 float surfaceHeight(int id, vec2 uvRaw) {
   vec2 uv = uvRaw * 0.19;
+  if (id == 32) {                                  // living stem: ridged along its length
+    return 0.42 + (smoothstep(0.62, 0.98, 0.5 + 0.5 * sin(uv.y * 11.0 + fbm(vec2(uv.x * 0.22, uv.y * 0.6)) * 3.2)) * (0.55 + 0.45 * fbm(vec2(uv.x * 0.12, uv.y * 1.3)))) * 0.38 + fbm(vec2(uv.x * 0.08, uv.y * 3.0)) * 0.30;
+  }
   if (id == 1) {                                   // botanical: fibres along the stem
     return fbm(vec2(uv.x * 0.10, uv.y * 2.6)) * 0.55
          + fbm(uv * 0.06) * 0.45;
@@ -217,6 +221,8 @@ float surfaceHeight(int id, vec2 uvRaw) {
  * mean what it says.
  */
 float featureFreq(int id) {
+  if (id == 33) return 0.6;                        // petal
+  if (id == 32) return 1.0;                        // living stem
   if (id == 4) return 1.5;                         // wool
   if (id == 15) return 1.7;                        // charcoal
   if (id == 7) return 1.1;                         // paper
@@ -250,6 +256,8 @@ float featureFreq(int id) {
 }
 
 float bumpStrength(int id) {
+  if (id == 33) return 0.10;                       // petal
+  if (id == 32) return 0.32;                       // living stem
   if (id == 4) return 1.75;                        // wool
   if (id == 6) return 1.55;                        // embroidery
   if (id == 11) return 1.45;                       // mould
@@ -291,6 +299,8 @@ float bumpStrength(int id) {
  * on it; pigment variation is what makes it a substance.
  */
 float albedoVar(int id) {
+  if (id == 33) return 0.08;                       // petal
+  if (id == 32) return 0.16;                       // living stem
   if (id == 11) return 0.78;                       // mould, blotchy
   if (id == 15) return 0.70;                       // charcoal
   if (id == 14) return 0.62;                       // watercolour, pooling
@@ -326,6 +336,14 @@ float albedoVar(int id) {
  */
 vec3 patternTint(int id, vec2 uvRaw, float h) {
   vec2 uv = uvRaw * 0.19;
+  if (id == 32) {                                  // living stem
+    // The pale lines down a stem are the bundles that carry its water, and
+    // they are most of what tells the eye this is grown: a plain tube of
+    // green, however it is lit, is a moulded thing.
+    float st = (smoothstep(0.62, 0.98, 0.5 + 0.5 * sin(uv.y * 11.0 + fbm(vec2(uv.x * 0.22, uv.y * 0.6)) * 3.2)) * (0.55 + 0.45 * fbm(vec2(uv.x * 0.12, uv.y * 1.3))));
+    float drift = fbm(vec2(uv.x * 0.05, uv.y * 0.4));
+    return mix(vec3(0.92), vec3(1.12, 1.14, 0.94), st) * (0.93 + drift * 0.15);
+  }
 
   if (id == 17) {                                  // rust
     // oxide in patches, bare metal showing through where it has not taken
@@ -394,6 +412,8 @@ vec3 patternTint(int id, vec2 uvRaw, float h) {
 }
 
 float sheenStrength(int id) {
+  if (id == 33) return 0.12;                       // petal
+  if (id == 32) return 0.42;                       // living stem: the down on it
   if (id == 4) return 1.15;                        // wool
   if (id == 6) return 0.85;                        // embroidery
   if (id == 5) return 0.70;                        // thread
@@ -575,6 +595,12 @@ void main() {
   vec3 T = abs(det) > 1e-8 ? normalize((dpx * duy.y - dpy * dux.y) / det) : normalize(dpx);
   vec3 Bt = normalize(cross(N, T));
   N = normalize(N - (T * (hx - h0) + Bt * (hy - h0)) * bumpStrength(matId) * 1.45 * uRelief);
+  // The world is cut in facets, and a plant smooth to the last polygon in it
+  // reads as pasted in from somewhere else. Cut it the same way.
+  if ((uFacet > 1.5 && matId != 27) || (uFacet > 0.5 && (matId == 32 || matId == 33))) {
+    N = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    if (dot(N, V) < 0.0) N = -N;
+  }
 
   vec3 L = normalize(uLightDir);
   vec3 H = normalize(L + V);
@@ -706,6 +732,14 @@ void main() {
     direct += albedo * uSunColour * rim * sheenAmt * (0.35 + ndl * 0.65) * shadow;
   }
 
+  // A petal or a thin stem is lit through: the side away from the sun is not
+  // in shade but glowing, deeper in colour, which is what separates tissue
+  // from painted card.
+  if (matId == 33 || matId == 32) {
+    float thru = max(dot(normalize(vNormal) * sign(dot(normalize(vNormal), V)), -L), 0.0);
+    vec3 deep = albedo * albedo * 1.6;
+    direct += deep * uSunColour * (0.25 + thru * 0.75) * (matId == 33 ? 0.30 : 0.12) * mix(0.6, 1.0, shadow);
+  }
   // light coming through a leaf or a petal from behind
   float back = pow(max(dot(V, -L), 0.0), 2.0) * trans;
   direct += albedo * uSunColour * back * 0.55 * shadow;
@@ -842,6 +876,8 @@ vec3 aces(vec3 x) {
 // there is least colour already, so a hazed hillside comes back and a petal
 // that is doing fine is left alone. A flat multiplier would take the picture
 // straight to poster paint, which is the other way to be wrong about this.
+uniform float uClean;           // 1: a render, not a photograph: no grain, no lens
+uniform float uVivid;           // extra saturation after the grade (the 3D look's)
 vec3 graded(vec3 c) {
   float mx = max(c.r, max(c.g, c.b));
   float mn = min(c.r, min(c.g, c.b));
@@ -849,6 +885,8 @@ vec3 graded(vec3 c) {
   float lift = 1.0 + 0.70 * (1.0 - sat) * (1.0 - sat);
   float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
   c = mix(vec3(l), c, lift);
+  // the 3D look's colour, given back once more and flatly
+  c = max(mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.0 + uVivid), 0.0);
   // and a little contrast under it: washed-out is as much a tonal fault as a
   // chromatic one, and saturation alone on a flat picture only makes it lurid.
   //
@@ -1289,8 +1327,8 @@ void main() {
   vec2 ca = (vUv - 0.5) * 0.0006;
   vec4 rs = texture(uScene, vUv + ca);
   vec4 bs = texture(uScene, vUv - ca);
-  if (int(rs.a * 255.0 + 0.5) < 40) col.r = mix(col.r, rs.r, 0.6);
-  if (int(bs.a * 255.0 + 0.5) < 40) col.b = mix(col.b, bs.b, 0.6);
+  if (uClean < 0.5 && int(rs.a * 255.0 + 0.5) < 40) col.r = mix(col.r, rs.r, 0.6);
+  if (uClean < 0.5 && int(bs.a * 255.0 + 0.5) < 40) col.b = mix(col.b, bs.b, 0.6);
 
   col *= uExposure;
   col = aces(col);
@@ -1299,10 +1337,10 @@ void main() {
 
   // grain, and a little more of it in the shadows where film has more
   float g = fract(sin(dot(vUv * 1024.0 + uTime, vec2(12.9898, 78.233))) * 43758.5453);
-  col += (g - 0.5) * 0.020 * (1.3 - dot(col, vec3(0.33)));
+  col += (g - 0.5) * 0.020 * (1.3 - dot(col, vec3(0.33))) * (1.0 - uClean);
 
   float r = length((vUv - 0.5) * vec2(1.0, 1.15));
-  col *= 1.0 - smoothstep(0.42, 0.95, r) * 0.34;
+  col *= 1.0 - smoothstep(0.42, 0.95, r) * mix(0.34, 0.12, uClean);
 
   outColour = vec4(col, 1.0);
 }`;
@@ -1395,12 +1433,17 @@ export function makeGlyphAtlas(gl) {
 export class Renderer3D {
   constructor(canvas, opts = {}) {
     this.canvas = canvas;
+    // the 3D look's own plant and grade (riso and clay draw on this renderer too)
+    this.real = !!opts.real;
     this.gl = createGL(canvas, opts);
     const gl = this.gl;
 
-    this.sceneProg = program(gl, SCENE_VS, SCENE_FS);
-    this.depthProg = program(gl, DEPTH_VS, DEPTH_FS);
-    this.postProg = program(gl, POST_VS, POST_FS);
+    // (a look built on this renderer may hand in its own versions of the shaders)
+    const src = { SCENE_VS, SCENE_FS, DEPTH_VS, POST_FS };
+    if (opts.shaders) Object.assign(src, opts.shaders(src));
+    this.sceneProg = program(gl, src.SCENE_VS, src.SCENE_FS);
+    this.depthProg = program(gl, src.DEPTH_VS, DEPTH_FS);
+    this.postProg = program(gl, POST_VS, src.POST_FS);
 
     this.shadow = shadowTarget(gl, SHADOW_SIZE);
     this.quad = fullscreenTriangle(gl, this.postProg);
@@ -1519,7 +1562,7 @@ export class Renderer3D {
     if (this.builtKey !== key) {
       this.builtKey = key;
       disposeMesh(gl, this.plantMesh);
-      const built = buildPlant(plant, reveal);
+      const built = buildPlant(plant, reveal, { real: this.real });
       this.plantMesh = built.indices.length
         ? mesh(gl, this.sceneProg, built.data, built.indices, LAYOUT)
         : null;
@@ -1532,7 +1575,7 @@ export class Renderer3D {
       + ':' + Math.round((view?.w || 0) / 400) + ':' + Math.round((view?.h || 0) / 400);
     if (this.builtEnv !== envKey) {
       disposeMesh(gl, this.backdropMesh);
-      const built = buildBackdrop(env, view, this.worldKind ?? 0);
+      const built = buildBackdrop(env, view, this.worldKind ?? 0, { rounded: this.real && (globalThis.__rounded ?? 1) });
       this.backdropMesh = mesh(gl, this.sceneProg, built.data, built.indices, LAYOUT);
       this.backdropWide = built.wide;
       this.builtEnv = envKey;
@@ -1626,10 +1669,12 @@ export class Renderer3D {
     const night = this.nightness ?? 0;
     const dim = (c, k, tint) => c.map((v, i) => v * (1 - night * k) + night * tint[i]);
     const sun = dim(env.dark ? [1.9, 1.95, 2.2] : [4.2, 3.9, 3.4], 0.94, [0.10, 0.12, 0.22]);
-    const sky = dim(env.dark ? [0.06, 0.075, 0.12] : [0.20, 0.22, 0.26], 0.72, [0.05, 0.06, 0.13]);
+    const fill = this.real ? (globalThis.__fill ?? 1) : 1;
+    const sky = dim((env.dark ? [0.06, 0.075, 0.12] : [0.20, 0.22, 0.26]).map((v) => v * fill), 0.72, [0.05, 0.06, 0.13]);
     const ground = dim(env.dark ? [0.025, 0.025, 0.032] : [0.11, 0.095, 0.075], 0.80,
       [0.012, 0.013, 0.022]);
     setUniforms(gl, this.sceneProg, {
+      uFacet: this.real ? (globalThis.__facet ?? 0) : 0,
       uViewProj: viewProj,
       uLightViewProj: lightViewProj,
       uLightDir: LIGHT_DIR,
@@ -1638,7 +1683,7 @@ export class Renderer3D {
       uSkyColour: sky,
       uGroundColour: ground,
       uShadow: this.shadow.depth,
-      uRelief: this.reliefOff ? 0 : 1,
+      uRelief: this.reliefOff || (this.real && (globalThis.__flatSurf ?? 1)) ? 0 : 1,
       uSceneExposure: env.dark ? 1.25 : 1.0,
       uWorldKind: this.worldKind ?? 0,
       uNightness: this.nightness ?? 0,
@@ -1647,7 +1692,9 @@ export class Renderer3D {
       uUnderwater: PLACES[(this.worldKind ?? 0) % PLACES.length]?.underwater !== undefined
         ? 1 : 0,
       uGloom: PLACES[(this.worldKind ?? 0) % PLACES.length]?.cave ? 1 : 0,
-      uRecede: this.recedeOff ? 0 : 1,
+      // (the 3D look keeps the world at full colour: it was asked to be vivid,
+      // and the stems are the colour of a plant now, not of a material)
+      uRecede: this.recedeOff || this.real ? 0 : 1,
     });
     // The world can be left out, the way shadows can. A screen idiom takes its
     // contrast from whatever is behind it — that is how a mark stays visible on
@@ -1674,6 +1721,8 @@ export class Renderer3D {
     gl.disable(gl.DEPTH_TEST);
     gl.useProgram(this.postProg.p);
     setUniforms(gl, this.postProg, {
+      uClean: this.real && (globalThis.__clean ?? 1) ? 1 : 0,
+      uVivid: this.real ? (globalThis.__vivid ?? 0.55) : 0,
       uScene: this.hdr.colour,
       uBackdrop: this.bg.colour,
       uDepth: this.hdr.depth,

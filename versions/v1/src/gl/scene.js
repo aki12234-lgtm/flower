@@ -9,7 +9,7 @@
 import { makeRng, clamp, clamp01, lerp, noise2 } from '../rng.js';
 import { MATERIAL_BY_ID, MATERIALS, nodeOutlines, stemProfile, roundCorners } from '../materials.js';
 import { ENV_BY_ID, ENVIRONMENTS } from '../environment.js';
-import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt } from './meshes.js';
+import { MeshBuilder, tube, sphere, shard, blade, sheet, sweep, depthAt, setDetail, setRound, sphereAt } from './meshes.js';
 
 const cross3 = (a, b) => {
   const c = [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
@@ -34,6 +34,8 @@ export const MAT_ID = {
   // ground are lit and surfaced by the same system as everything else.
   cloud: 23, terrain: 24, scenery: 25, thicket: 26, water: 27, rock: 28,
   wing: 29, fish: 30, frond: 31,
+  stem: 32,                    // the 3D look's living stem
+  petal: 33,                   // and its flowers and leaves
   // 40 and above are the flat idioms, handled as screen-space treatments. The
   // boundary was at 20 and the substances had run up against it.
   vector: 40, lineart: 41, grain: 42, ascii: 43, pixel: 44, halftone: 45,
@@ -265,6 +267,58 @@ function reliefFor(materialId, salt) {
   };
 }
 
+/**
+ * A run of lattice points as a stem would grow it: the straight runs kept
+ * straight, each turn taken through an arc a couple of stem widths across, and
+ * the result laid out again at an even few units so the swelling at the nodes
+ * and the taper have points to land on. Rounding the raw points could not do
+ * this: they sit a step apart, and a corner cannot be rounder than the gap.
+ */
+function bent(pts, round) {
+  const keep = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const a = keep[keep.length - 1], p = pts[i], b = pts[i + 1];
+    const cross = (p.x - a.x) * (b.y - p.y) - (p.y - a.y) * (b.x - p.x);
+    if (Math.abs(cross) > 1e-6 * (1 + Math.hypot(p.x - a.x, p.y - a.y) * Math.hypot(b.x - p.x, b.y - p.y))) keep.push(p);
+  }
+  keep.push(pts[pts.length - 1]);
+  const curved = roundCorners(keep, round);
+  const out = [curved[0]];
+  const STEP = 2.5;
+  for (let i = 1; i < curved.length; i++) {
+    const a = curved[i - 1], b = curved[i];
+    const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / STEP));
+    for (let j = 1; j <= n; j++) {
+      const t = j / n;
+      out.push({ ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t) });
+    }
+  }
+  return chaikin(chaikin(out));
+}
+
+/** Corner-cutting, twice over: the arcs' own segments stop showing as kinks. */
+function chaikin(pts) {
+  if (pts.length < 3) return pts;
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const at = (t) => ({ ...(t < 0.5 ? a : b), x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t) });
+    if (i > 0) out.push(at(0.25));
+    if (i < pts.length - 2) out.push(at(0.75));
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
+}
+
+/** A living stem's surface: fine ridges along it and almost nothing else. */
+function stemRibs(salt) {
+  if (displacementOff) return null;
+  return (u, ang, p) => {
+    const n = noise2(u * 0.06 + salt, Math.cos(ang) * 2 + Math.sin(ang) * 2, 43) - 0.5;
+    return (Math.sin(ang * 7) * 0.55 + n * 0.45) * 0.07 * (p.r ?? p);
+  };
+}
+
 function stemColour(section, rng) {
   const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
   const wilt = clamp01(1 - (section.vitality ?? 1));
@@ -334,10 +388,85 @@ const rot = (v, axis, ang) => {
   ];
 };
 
+/**
+ * The 3D look's plant, grown rather than made.
+ *
+ * The answers give each section a material, and drawn as that material a stem
+ * is a velvet pipe or a rusted rod: a sculpture of a plant. The 3D look asks
+ * for the plant itself, so with `real` every stem is living tissue: green with
+ * the section's colour only as a cast in it (a red-stemmed plant is a real
+ * thing; a velvet one is not), finely ribbed and waxy rather than textured,
+ * thick at the root and fine at the tips, and bent through its corners instead
+ * of turning on them. The flowers and leaves follow, since they take their
+ * colour from the stem that bears them.
+ */
+export const REAL_STEMS = {
+  kind: 'herb',
+  hue: 112,          // the green they are all a version of
+  spread: 6,        // how far one section's green wanders from the next
+  cast: 0.22,       // how much of the answer's own colour stays in the stem
+  sat: 36, lum: 34,
+  thin: 0.62,       // stems, overall, against the width growth gives them
+  tip: 0.55,        // and the newest growth against the oldest
+  round: 2.2,       // corner radius, in stem widths
+};
+
+/**
+ * The colour of a stem at one point, by how old the growth there is (0 the
+ * root, 1 the newest tip). New growth is paler and yellower and the old is
+ * darker and duller everywhere; what the old turns into is the kind's.
+ */
+const STEM_KINDS = {
+  herb: { tip: [-9, 1.05, 1.16], base: [2, 0.82, 0.80] },
+  woody: { tip: [-9, 1.05, 1.15], base: [0, 1, 1], bark: [26, 20, 24], barkTo: 0.5 },
+  glaucous: { tip: [-10, 1.0, 1.08], base: [0, 0.9, 0.92] },
+};
+function alongStem(col, age, R) {
+  const K = STEM_KINDS[R.kind] || STEM_KINDS.herb;
+  const t = smooth01(age);
+  const end = (e) => ({ h: col.h + e[0], s: col.s * e[1], l: col.l * e[2] });
+  const a = end(K.base), b = end(K.tip);
+  let h = lerp(a.h, b.h, t), sat = lerp(a.s, b.s, t), l = lerp(a.l, b.l, t);
+  if (K.bark) {
+    const w = 1 - smooth01(clamp01(age / K.barkTo));
+    h = hueTowards(h, K.bark[0], w); sat = lerp(sat, K.bark[1], w); l = lerp(l, K.bark[2], w);
+  }
+  return hslToRgb(h, clamp(sat, 0, 100), clamp(l, 0, 100));
+}
+const smooth01 = (t) => t * t * (3 - 2 * t);
+
+function realStemColour(section, col, R) {
+  if (R.kind === 'glaucous') {
+    // the waxy bloom over it: blue-grey before it is green
+    const g = { ...R, hue: 165, sat: 13, lum: 52, cast: R.cast * 0.4 };
+    R = g;
+  }
+  const wilt = clamp01(1 - (section.vitality ?? 1));
+  const wander = (noise2(section.step * 0.37, 1.3, 29) - 0.5) * 2 * R.spread;
+  let h = hueTowards(R.hue + wander, col.h, R.cast);
+  h = hueTowards(h, 40, wilt * 0.55);
+  return {
+    h,
+    s: clamp(R.sat * (1 - wilt * 0.45) + (noise2(section.step * 0.51, 2.1, 31) - 0.5) * 10, 18, 70),
+    l: clamp(R.lum + (noise2(section.step * 0.23, 3.7, 37) - 0.5) * 8, 20, 50),
+  };
+}
+
 /** Build the whole plant as one mesh. */
-export function buildPlant(plant, reveal = null) {
+export function buildPlant(plant, reveal = null, opts = {}) {
   const mb = new MeshBuilder();
   const flowerHue = flowerHueFor(plant);
+  const R = opts.real ? { ...REAL_STEMS, ...(globalThis.__realStems || {}) } : null;
+  setDetail(R ? 2.2 : 1);
+  try {
+    return buildPlantIn(plant, reveal, R, mb, flowerHue);
+  } finally {
+    setDetail(1);
+  }
+}
+
+function buildPlantIn(plant, reveal, R, mb, flowerHue) {
+  const lastStep = Math.max(1, ...plant.sections.map((s) => s.step + 1));
 
   for (const section of plant.sections) {
     // the section currently growing is built only as far as it has got
@@ -345,9 +474,13 @@ export function buildPlant(plant, reveal = null) {
     const kMax = growing ? reveal.progress * section.steps : Infinity;
     if (growing && reveal.progress <= 0) continue;
     const mat = MATERIAL_BY_ID[section.materialId] || MATERIALS[0];
-    const base3 = SURFACE[section.materialId] || SURFACE.botanical;
-    const matId = MAT_ID[section.materialId] || 1;
+    // (real: the flowers and leaves are plant tissue, whatever the answers)
+    const surfId = R ? 'petal' : section.materialId;
+    const base3 = R ? [0.62, 0.0, 0.55] : (SURFACE[surfId] || SURFACE.botanical);
+    const matId = MAT_ID[surfId] || 1;
     const surf = [base3[0], base3[1], base3[2], matId];
+    // and the stem a stem: matte, with light coming through it
+    const stemSurf = R && [0.72, 0.0, 0.26, MAT_ID.stem];
 
     // For a flat idiom the roughness slot carries the layer instead.
     //
@@ -361,16 +494,26 @@ export function buildPlant(plant, reveal = null) {
       ? [clamp(z / 190 + 0.5, 0, 1), base3[1], base3[2], matId]
       : surf);
     const rng = makeRng(1013 + section.step * 7919);
-    const col = stemColour(section, rng);
+    const answered = stemColour(section, rng);
+    const col = R ? realStemColour(section, answered, R) : answered;
     const rgb = hslToRgb(col.h, col.s, col.l);
     const salt = section.step * 3.7;
-    const relief = reliefFor(section.materialId, salt);
+    // (real: a stem is smooth to the touch; its ridges are in the colour)
+    const relief = R ? null : reliefFor(section.materialId, salt);
 
     // ---- stems ----
     for (const seg of section.segments) {
       const pts = growing ? seg.points.filter((p) => p.k <= kMax) : seg.points;
       if (pts.length < 2) continue;
-      const prof = stemProfile(roundCorners(pts, 0.55), 44 + (section.step % 4) * 7, 0.24);
+      // (real: thinner, tapering with age, and bent rather than cornered)
+      const run = R
+        ? pts.map((p) => {
+          const age = clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep);
+          return { ...p, w: p.w * R.thin * lerp(1, R.tip, Math.pow(age, 0.85)) };
+        })
+        : pts;
+      const prof = stemProfile(R ? bent(run, R.round) : roundCorners(run, 0.55),
+        R ? 70 + (section.step % 4) * 9 : 44 + (section.step % 4) * 7, R ? 0.12 : 0.24);
 
       // Where a branch meets its parent.
       //
@@ -413,7 +556,7 @@ export function buildPlant(plant, reveal = null) {
         };
       });
       // more sides, because a displaced outline needs somewhere to be displaced
-      const segSurf = layered(segZ);
+      const segSurf = stemSurf || layered(segZ);
       // Colour that moves along the member.
       //
       // One flat green from base to tip is the thing that made a stem read as
@@ -421,11 +564,18 @@ export function buildPlant(plant, reveal = null) {
       // duller, newer growth brighter — and it warms towards red at every node,
       // which is where the pigment gathers and the commonest tell that a thing
       // is grown rather than moulded.
-      tube(mb, path, 18,
+      const ages = R && prof.points.map((p) =>
+        clamp01((section.step + (p.k ?? 0) / Math.max(1, section.steps)) / lastStep));
+      tube(mb, path, R ? (globalThis.__stemSides ?? 28) : 18,
         (i, p) => {
           const nd = nodeAt[i];
           const along = noise2(p.x * 0.010 + salt, p.y * 0.010, 53) - 0.5;
           const k = 1 + along * 0.20 - nd * 0.14;
+          // a living node darkens a little; the red flush is the made stems'
+          if (R) {
+            const c = alongStem(col, ages[i], R);
+            return c.map((v) => Math.min(1, v * (k - nd * 0.04)));
+          }
           return [
             Math.min(1, rgb[0] * k + nd * 0.10),   // nodes take on a red flush
             rgb[1] * k * (1 - nd * 0.16),
@@ -443,7 +593,8 @@ export function buildPlant(plant, reveal = null) {
       // touch larger so nothing of the crease underneath shows past it.
       // Whatever shading a joint deserves, the light gives it.
       if (isBranch) {
-        sphere(mb, p0.x, p0.y, segZ, path[0].r * 1.06, 9, 12, rgb, segSurf, relief);
+        sphere(mb, p0.x, p0.y, segZ, path[0].r * 1.06, 9, 12,
+          R ? alongStem(col, ages[0], R) : rgb, segSurf, relief);
       }
 
       // Round both stem ends. A tube caps only its far end, so every segment
@@ -451,8 +602,9 @@ export function buildPlant(plant, reveal = null) {
       // stem genuinely stops the far cap faces the camera as a cut pipe. Where
       // one section runs into the next the rounding is buried inside the
       // following segment and costs nothing, so it needs no special case.
-      for (const e of [path[0], path[path.length - 1]]) {
-        sphere(mb, e.x, e.y, e.z, e.r * 1.0, 8, 10, rgb, segSurf, relief);
+      for (const [e, j] of [[path[0], 0], [path[path.length - 1], path.length - 1]]) {
+        sphere(mb, e.x, e.y, e.z, e.r * 1.0, 8, 10,
+          R ? alongStem(col, ages[j], R) : rgb, segSurf, relief);
       }
     }
 
@@ -1268,23 +1420,62 @@ const placeAt = (kind) => PLACES[((kind % PLACES.length) + PLACES.length) % PLAC
  * seedling, so ground reads flat much further out here than feels right on
  * paper, for the same reason it does in life.
  */
+/**
+ * The 3D look's world is rounded: its plant is smooth, and land folded into
+ * creases and boulders broken into pyramids put it in a low-poly world it does
+ * not belong to. Set for the length of one backdrop build.
+ */
+let ROUNDED = false;
+// Rock and fungus, rounded: their displacement reaches them as a position, and
+// what roughens them bends instead of creasing. Otherwise left exactly as the
+// other looks have always had them.
+const ballAt = (...a) => (ROUNDED ? sphereAt : sphere)(...a);
+const roughN = (x, z, f) => (ROUNDED ? smoothNoise : noise2)(x, z, f);
+
+/**
+ * Rounded ground is the same land drawn from noise that eases between its
+ * lattice points instead of running straight between them: a fine mesh over
+ * the ordinary noise shows every one of those straight runs as a zigzag ridge.
+ */
+function hash2(ix, iz, seed) {
+  let h = (ix * 374761393 + iz * 668265263 + seed * 1442695041) | 0;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function smoothNoise(x, z, seed) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  const fx = x - ix, fz = z - iz;
+  const q = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+  const ux = q(fx), uz = q(fz);
+  const a = hash2(ix, iz, seed), b = hash2(ix + 1, iz, seed);
+  const c = hash2(ix, iz + 1, seed), d = hash2(ix + 1, iz + 1, seed);
+  return lerp(lerp(a, b, ux), lerp(c, d, ux), uz);
+}
+
 function groundHeight(x, z, place) {
+  return groundHeightRaw(x, z, place);
+}
+
+function groundHeightRaw(x, z, place) {
   const d = Math.hypot(x, z);
   const settle = clamp01((d - 2600) / 7000);
   const [a, b, c] = place.swell;
   // Which character this stretch of ground has, and it changes as you go.
-  const sharpness = clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4);
+  const sharpness = ROUNDED ? 0 : clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4);
   const ridged = (f, sc, amp) => {
     const v = noise2(x * sc, z * sc, f);
     return (1 - Math.abs(v * 2 - 1)) * amp - amp * 0.5;   // folded: creases, not swells
   };
-  const round = (f, sc, amp) => (noise2(x * sc, z * sc, f) - 0.5) * 2 * amp;
+  const round = (f, sc, amp) => ((ROUNDED ? smoothNoise : noise2)(x * sc, z * sc, f) - 0.5) * 2 * amp;
   const mixed = (f, sc, amp) => lerp(round(f, sc, amp), ridged(f, sc, amp * 1.5), sharpness);
   let h = mixed(31, 0.00030, a);
   h += mixed(77, 0.0011, b);
-  h += mixed(13, 0.0044, c);
+  if (!ROUNDED) h += mixed(13, 0.0044, c);
   if (place.dunes) {                        // long, and one-sided
-    h += Math.sin(x * 0.0008 + noise2(z * 0.0006, 0, 5) * 3.0) * 150;
+    // Rounded, the crests meander rather than jitter: the old noise had a
+    // fast term along z that kinked every ridge into a hairline.
+    const wander = ROUNDED ? smoothNoise(z * 0.0006, 0.5, 5) : noise2(z * 0.0006, 0, 5);
+    h += Math.sin(x * 0.0008 + wander * 3.0) * 150;
   }
   if (place.seabed !== undefined) {
     // Open water: there is no shore to walk down, the floor is simply a long
@@ -1306,8 +1497,8 @@ function buildTerrain(mb, spanX, place) {
   const surf = place.rockFloor
     ? [SURFACE.rock[0], SURFACE.rock[1], SURFACE.rock[2], MAT_ID.rock]
     : [SURFACE.terrain[0], SURFACE.terrain[1], SURFACE.terrain[2], MAT_ID.terrain];
-  const cols = 128;
-  const rows = 80;
+  const cols = ROUNDED ? 220 : 128;
+  const rows = ROUNDED ? 220 : 80;
   const base = mb.vertexCount;
   const width = Math.max(spanX * 2.6, 26000);
   const tint = place.ground;
@@ -1323,11 +1514,16 @@ function buildTerrain(mb, spanX, place) {
       const y = groundHeight(x, z, place);
       // The normal comes off the height field itself, so light breaks over the
       // land the same way it breaks over a stem.
-      const e = 40;
-      const nx = groundHeight(x + e, z, place) - groundHeight(x - e, z, place);
-      const nz = groundHeight(x, z + e, place) - groundHeight(x, z - e, place);
-      const len = Math.hypot(nx, 2 * e, nz) || 1;
-      const n = [-nx / len, (2 * e) / len, -nz / len];
+      // (rounded: the normal read at the scale of the mesh itself. Read at
+      // forty units where rows lie hundreds apart, it describes ripples the
+      // mesh does not have, and each row comes out a lit step: terraces.)
+      const gap = ROUNDED ? Math.max(40, Math.abs((FAR_Z - NEAR_Z) * (2 * t * 0.86 + 0.14) / rows) * 0.6) : 40;
+      const ex = ROUNDED ? Math.max(40, width * (0.6 + Math.abs(z / FAR_Z) * 0.7) / cols * 0.6) : 40;
+      const ez = gap;
+      const nx = (groundHeight(x + ex, z, place) - groundHeight(x - ex, z, place)) / ex;
+      const nz = (groundHeight(x, z + ez, place) - groundHeight(x, z - ez, place)) / ez;
+      const len = Math.hypot(nx, 2, nz) || 1;
+      const n = [-nx / len, 2 / len, -nz / len];
 
       const patch = noise2(x * 0.00055, z * 0.00055, 44);
       const drift = noise2(x * 0.0022, z * 0.0022, 61);
@@ -1475,8 +1671,8 @@ function buildClouds(mb, place) {
 function buildCave(mb, place) {
   const surf = [SURFACE.rock[0], SURFACE.rock[1], SURFACE.rock[2], MAT_ID.rock];
   const rng = makeRng(5150);
-  const cols = 46;
-  const rows = 64;
+  const cols = ROUNDED ? 140 : 46;
+  const rows = ROUNDED ? 260 : 64;
   const zNear = 4200;
   const zFar = -34000;
   const OPEN = -2600;                        // the roof breaks open above the plant
@@ -1510,8 +1706,12 @@ function buildCave(mb, place) {
       // surface detail underneath to say what it was made of. The shape is
       // calmer now and the stone happens on the surface, where it belongs.
       const bed = Math.sin(a * 5.0 + noise2(z * 0.0004, 0, 11) * 6.0) * 55;
-      const fracture = (noise2(Math.cos(a) * 700, z * 0.0009, 7) - 0.5) * 150;
-      const coarse = (noise2(Math.cos(a) * 220, z * 0.00028, 19) - 0.5) * 380;
+      // Rounded, the stone is worn rather than broken: the same three scales
+      // of relief, from noise that bends instead of creasing.
+      const fracture = ROUNDED ? (smoothNoise(a * 2.6, z * 0.0011, 7) - 0.5) * 170
+        : (noise2(Math.cos(a) * 700, z * 0.0009, 7) - 0.5) * 150;
+      const coarse = ROUNDED ? (smoothNoise(a * 0.9, z * 0.00032, 19) - 0.5) * 420
+        : (noise2(Math.cos(a) * 220, z * 0.00028, 19) - 0.5) * 380;
       const ripple = bed + fracture + coarse;
       const x = -Math.cos(a) * (w + ripple);
       const y = Math.sin(a) * (h + ripple * 0.6) - 300;
@@ -1602,8 +1802,8 @@ function buildCave(mb, place) {
     if (Math.abs(x) < 260 && z > -1200) continue;
     const y = groundHeight(x, z, place);
     const r = rng.range(60, 260);
-    sphere(mb, x, y + r * 0.2, z, r, 5, 8, [0.19, 0.17, 0.15], surf,
-      (px, py, pz) => (noise2(px * 0.02, pz * 0.02, 8) - 0.5) * r * 0.55
+    ballAt(mb, x, y + r * 0.2, z, r, 5, 8, [0.19, 0.17, 0.15], surf,
+      (px, py, pz) => (roughN(px * 0.02, pz * 0.02, 8) - 0.5) * r * 0.55
         - Math.max(0, py - y) * 0.5);
   }
 }
@@ -1630,14 +1830,14 @@ function buildScatter(mb, place) {
       // Round or broken, according to the ground it is lying on — so an
       // outcrop of crags and a scatter of boulders are never mixed together,
       // and crossing from one stretch to the next is something you can see.
-      if (clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4) > 0.5) {
+      if (!ROUNDED && clamp01((noise2(x * 0.00016, z * 0.00016, 91) - 0.34) * 3.4) > 0.5) {
         const tall = 0.34 + rng.range(0, 0.3);
         shard(mb, x, y + w * tall * 0.7, z, w,
           (i) => rng.range(-0.55, 0.75) - (i === 3 ? 0.4 : 0)
             - (i === 2 ? 1 - tall * 2.4 : 0), [0.34, 0.32, 0.30], stone);
       } else {
-        sphere(mb, x, y + r * 0.16, z, w, 4, 6, [0.36, 0.34, 0.31], stone,
-          (px, py, pz) => (noise2(px * 0.05, pz * 0.05, 8) - 0.5) * w * 0.45
+        ballAt(mb, x, y + r * 0.16, z, w, ROUNDED ? 9 : 4, ROUNDED ? 14 : 6, [0.36, 0.34, 0.31], stone,
+          (px, py, pz) => (roughN(px * 0.05, pz * 0.05, 8) - 0.5) * w * 0.45
             - Math.max(0, py - y) * 0.55);
       }
     } else if (what === 'bush' || what === 'scrub') {
@@ -1695,7 +1895,7 @@ function buildScatter(mb, place) {
           { x: mx, y: my + h, z: mz, r: wide * 0.17 },
         ], 5, () => [0.80, 0.76, 0.66], () => bot);
         // the cap: a squashed dome, which is the whole silhouette
-        sphere(mb, mx, my + h, mz, wide, 4, 7, cap, bot,
+        ballAt(mb, mx, my + h, mz, wide, 4, 7, cap, bot,
           (px, py) => -Math.max(0, py - (my + h)) * 0.65);
       }
     } else if (what === 'moss') {
@@ -1704,7 +1904,7 @@ function buildScatter(mb, place) {
         const a = rng.range(0, Math.PI * 2);
         const d = r * rng.range(0, 0.7);
         const rad = r * rng.range(0.5, 0.9);
-        sphere(mb, x + Math.cos(a) * d, y + rad * 0.18, z + Math.sin(a) * d, rad, 4, 6,
+        ballAt(mb, x + Math.cos(a) * d, y + rad * 0.18, z + Math.sin(a) * d, rad, 4, 6,
           [0.16, 0.34, 0.11], bot,
           (px, py) => -Math.max(0, py - y) * 0.72);
       }
@@ -1963,20 +2163,24 @@ function buildMound(mb, place) {
  */
 function buildSurface(mb, place) {
   const surf = [SURFACE.water[0], SURFACE.water[1], SURFACE.water[2], MAT_ID.water];
-  const cols = 70;
-  const rows = 46;
+  const cols = ROUNDED ? 200 : 70;
+  const rows = ROUNDED ? 140 : 46;
   const base = mb.vertexCount;
   const y0 = place.underwater;
   const span = 60000;
 
   const waveAt = (x, z) => Math.sin(x * 0.0035 + z * 0.0021) * 46
     + Math.sin(x * 0.0012 - z * 0.0029) * 62
-    + (noise2(x * 0.0018, z * 0.0018, 23) - 0.5) * 70;
+    + ((ROUNDED ? smoothNoise : noise2)(x * 0.0018, z * 0.0018, 23) - 0.5) * 70;
 
   for (let i = 0; i <= rows; i++) {
-    const z = NEAR_Z + (-span - NEAR_Z) * (i / rows);
+    // Rounded, the rows bunch up near the camera, where the ceiling is close
+    // enough overhead for each cell to be seen as a flat plate.
+    const zt = ROUNDED ? (i / rows) ** 2 : i / rows;
+    const z = NEAR_Z + (-span - NEAR_Z) * zt;
     for (let j = 0; j <= cols; j++) {
-      const x = (j / cols - 0.5) * span * 1.6;
+      const u = j / cols - 0.5;
+      const x = (ROUNDED ? Math.sign(u) * (2 * u) ** 2 * 0.5 : u) * span * 1.6;
       const y = y0 + waveAt(x, z);
       const e = 90;
       const nx = waveAt(x + e, z) - waveAt(x - e, z);
@@ -1984,7 +2188,7 @@ function buildSurface(mb, place) {
       const len = Math.hypot(nx, 2 * e, nz) || 1;
       // Normal pointing DOWN: this is a ceiling, and it is lit from above
       // through itself, so the face the camera sees is its underside.
-      const glint = clamp01(noise2(x * 0.0009, z * 0.0009, 31) * 1.6 - 0.3);
+      const glint = clamp01((ROUNDED ? smoothNoise : noise2)(x * 0.0009, z * 0.0009, 31) * 1.6 - 0.3);
       mb.push([x, y, z], [nx / len, -(2 * e) / len, nz / len],
         [0.10 + glint * 0.55, 0.30 + glint * 0.6, 0.42 + glint * 0.5], surf,
         [x * 0.02, z * 0.02]);
@@ -2003,7 +2207,9 @@ function buildFish(mb, place) {
   const rng = makeRng(9001);
   const bot = [SURFACE.fish[0], SURFACE.fish[1], SURFACE.fish[2], MAT_ID.fish];
   for (let school = 0; school < 9; school++) {
-    const cz = -900 - rng.range(0, 11000);
+    // Not right in front of the lens: a school a few hundred units off fills a
+    // quarter of the frame with spheres and stops being fish.
+    const cz = -3200 - rng.range(0, 10000);
     const away = -cz;
     const cx = rng.range(-1, 1) * away * 0.28;
     const cy = groundHeight(cx, cz, place) + rng.range(400, place.underwater * 0.8);
@@ -2016,9 +2222,14 @@ function buildFish(mb, place) {
       const y = cy + rng.range(-1, 1) * size * 7;
       const z = cz + rng.range(-1, 1) * size * 14;
       // a body and a tail, at the size a fish is when you notice it
-      sphere(mb, x, y, z, size, 4, 6, col, bot,
+      const from = mb.vertexCount;
+      sphereAt(mb, x, y, z, size, 4, 6, col, bot,
         (px) => -Math.abs(px - x) * 0.35);
       sphere(mb, x + size * 1.5, y, z, size * 0.5, 3, 5, col, bot);
+      // The whole school swims on one phase. Keyed to where each vertex was it
+      // could not: a fish lying across the edge of two cells was pulled ninety
+      // units two ways at once and drawn as a smear.
+      mb.stamp(from, school / 9);
     }
   }
 }
@@ -2048,9 +2259,9 @@ function buildCoral(mb, x, y, z, r, rng, bot, stone) {
     for (let k = 0; k < 4; k++) {
       const a = rng.range(0, 6.28);
       const d = r * rng.range(0, 0.5);
-      sphere(mb, x + Math.cos(a) * d, y + r * 0.3, z + Math.sin(a) * d,
+      ballAt(mb, x + Math.cos(a) * d, y + r * 0.3, z + Math.sin(a) * d,
         r * rng.range(0.5, 0.8), 5, 8, col, stone,
-        (px, py, pz) => (noise2(px * 0.14, pz * 0.14, 41) - 0.5) * r * 0.5);
+        (px, py, pz) => (roughN(px * 0.14, pz * 0.14, 41) - 0.5) * r * 0.5);
     }
   } else {
     // fan: a flat blade standing across the current
@@ -2104,7 +2315,7 @@ function buildCreatures(mb, place) {
     const fz = Math.sin(face);
 
     // body, neck, head — the three masses that make an animal read as one
-    sphere(mb, x, y + s * 2.2, z, s * 1.15, 5, 7, coat, hide,
+    sphereAt(mb, x, y + s * 2.2, z, s * 1.15, 5, 7, coat, hide,
       (px) => -Math.abs(px - x) * 0.18);
     tube(mb, [
       { x: x + fx * s * 0.9, y: y + s * 2.5, z: z + fz * s * 0.9, r: s * 0.34 },
@@ -2156,6 +2367,7 @@ function buildBirds(mb, place) {
       const y = cy + rng.range(-1, 1) * size * 6;
       const z = cz + Math.sin(heading) * t * size * 22 + rng.range(-1, 1) * size * 5;
       const beat = rng.range(-0.3, 0.55);              // where in the stroke it is
+      const from = mb.vertexCount;
 
       sphere(mb, x, y, z, size * 0.42, 3, 5, [0.17, 0.16, 0.17], dark);
       for (const w of [-1, 1]) {
@@ -2169,11 +2381,23 @@ function buildBirds(mb, place) {
             r: size * 0.03 },
         ], 4, () => [0.15, 0.14, 0.15], () => dark);
       }
+      mb.stamp(from, flock / 7);       // the flock flies as one; see the fish
     }
   }
 }
 
-export function buildBackdrop(env, view = null, kind = 0) {
+export function buildBackdrop(env, view = null, kind = 0, opts = {}) {
+  ROUNDED = !!opts.rounded;
+  if (ROUNDED) setRound({ rows: 14, cols: 24, sides: 18 });
+  try {
+    return buildBackdropIn(env, view, kind);
+  } finally {
+    ROUNDED = false;
+    setRound(null);
+  }
+}
+
+function buildBackdropIn(env, view, kind) {
   const mb = new MeshBuilder();
   const top = ENV_BY_ID[env?.id]?.sky?.[0]?.[1] || '#b6a894';
   const rgb = hexToLinear(top);

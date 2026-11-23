@@ -42,6 +42,17 @@ function facetGrey(nx, ny) {
 function drawFolds(ctx, shapes, px = 1) {
   for (const s of shapes) {
     if (s.type === 'band') {
+      // a stem is a flat strip of paper: folded down its length it read as a
+      // different thing from the paper around it
+      ctx.fillStyle = facetGrey(0, 0);
+      ctx.beginPath();
+      const o = outlineOf(s);
+      ctx.moveTo(o[0].x, o[0].y);
+      for (let j = 1; j < o.length; j++) ctx.lineTo(o[j].x, o[j].y);
+      ctx.closePath();
+      ctx.fill();
+      continue;
+    } else if (s.type === 'band-folded') {
       const p = s.pts;
       for (let i = 0; i + 1 < p.length; i++) {
         const a = p[i], b = p[i + 1];
@@ -486,81 +497,80 @@ void main() {
     col = folded(printOn(paper(nrgb, nk, 1.0), ap, nk, 0.45, 1.0) * (1.0 + uLift * 0.06), uFold, cp);
   }
 
-  // ---- heads opening: half on the page, half turning over above it ----
-  const vec3 LIGHT = vec3(-0.42, -0.52, 0.74);   // from the upper left, and in front
+  // ---- heads opening: a ball of crushed paper, slowly uncrumpling ----
+  // The head starts squeezed into a crumpled wad about its own middle and
+  // slowly opens out flat. Crushed, it is a mass of small facets each turned
+  // its own way, the outline ragged and pulled in; as it opens the wad grows,
+  // the facets lie down and the creases fade, but never quite: paper that
+  // has been screwed up and smoothed out keeps its creases.
+  const vec3 LIGHT = vec3(-0.42, -0.52, 0.74);
   for (int i = 0; i < 3; i++) {
     if (i >= uHeadN) break;
     vec2 H = uHead[i].xy;
-    vec2 A = normalize(uHead[i].zw);
-    vec2 N = vec2(-A.y, A.x);
-    float ph = uHeadP[i].x, R = uHeadP[i].y;
-    float cph = cos(ph), sph = sin(ph);
-    const float D = 900.0;                       // how far the lens is, for the perspective
-    // Is there a point of the turning half over here? A point d out from the
-    // crease, turned by ph, is seen at d cos(ph), enlarged by its height.
-    // Run that backwards from this pixel.
-    vec2 rel = p - H;
-    float a1 = dot(rel, A), n1 = dot(rel, N);
-    float flap = 0.0;
-    vec3 flapCol = vec3(0.0);
-    float den = cph + n1 * sph / D;
-    if (abs(den) > 1e-3) {
-      float d = n1 / den;
-      if (d > 0.0 && d < R) {
-        float zf = 1.0 - d * sph / D;
-        vec2 src = H + A * a1 * zf + N * d;
-        vec4 hc = texture(uHeads, uvAt(src));
-        if (hc.a > 0.5) {
-          flap = 1.0;
-          // its own light: the normal turns with it
-          vec3 nrm = normalize(vec3(-N * sph, cph));
-          bool back = cph < 0.0;
-          if (back) nrm = -nrm;
-          float lit = (0.55 + 0.45 * max(dot(nrm, normalize(LIGHT)), 0.0)) / (0.55 + 0.45 * normalize(LIGHT).z);
-          vec3 rgb = hc.rgb / max(hc.a, 1e-3);
-          float hk = keyOf(rgb);
-          vec3 face = back ? CORE * grain(src - uAnchor, 31.0) : folded(printOn(paper(rgb, hk, 1.0), src - uAnchor, hk, 0.45, 1.0), uHeadFold, src);
-          flapCol = face * lit;
-        }
-      }
-    }
-    // the half that stays, where it is
-    float baseHit = 0.0;
-    vec3 baseCol = vec3(0.0);
-    if (n1 <= 0.5 && length(rel) < R * 1.3) {
-      vec4 hb = texture(uHeads, uvAt(p));
-      if (hb.a > 0.5) {
-        vec3 rgb = hb.rgb / max(hb.a, 1e-3);
-        float hk = keyOf(rgb);
-        baseHit = 1.0;
-        baseCol = folded(printOn(paper(rgb, hk, 1.0), ap, hk, 0.45, 1.0), uHeadFold, p);
-      }
-    }
-    // the shadow of the turning half, cast away from the light, longer the
-    // higher it is held
+    float c = uHeadP[i].x, R = uHeadP[i].y;
+    float seed = float(i) * 37.0 + H.x * 0.013;
+    float scale = mix(1.0, 0.28, c);
+    // crumpled, where on the flat head does this pixel come from?
+    vec2 rel = (p - H) / scale;
+    vec2 wob = vec2(fbm(rel * 0.035 + seed), fbm(rel * 0.035 + seed + 9.0)) - 0.5;
+    vec2 src = H + rel + wob * R * 0.5 * c;
+    // and the shadow: a wad sits higher, so its shadow falls further off
     float sh = 0.0;
-    vec2 toward = -normalize(LIGHT).xy / normalize(LIGHT).z;
-    for (int k = 0; k < 10; k++) {
-      // spread over heights and a little to the side: a soft shadow, not bars
-      float fk = float(k);
-      float hgt = R * 0.45 * max(sph, 0.0) * (0.55 + 0.09 * fk);
-      vec2 q = p - toward * hgt + N * (fract(fk * 0.618) - 0.5) * (2.0 + hgt * 0.25);
-      vec2 r2 = q - H;
-      float n2 = dot(r2, N);
-      float dn = cph + n2 * sph / D;
-      if (abs(dn) > 1e-3) {
-        float d2 = n2 / dn;
-        if (d2 > 0.0 && d2 < R) {
-          vec2 s2 = H + A * dot(r2, A) * (1.0 - d2 * sph / D) + N * d2;
-          sh += step(0.5, texture(uHeads, uvAt(s2)).a);
-        }
-      }
+    vec2 off = vec2(-3.0, -4.0) * (1.0 + 2.5 * c);
+    for (int k = 0; k < 6; k++) {
+      float b = float(k) * 1.047;
+      vec2 r2 = (p + off + vec2(cos(b), sin(b)) * (2.0 + 3.0 * c) - H) / scale;
+      vec2 w2 = vec2(fbm(r2 * 0.035 + seed), fbm(r2 * 0.035 + seed + 9.0)) - 0.5;
+      sh += step(0.5, texture(uHeads, uvAt(H + r2 + w2 * R * 0.5 * c)).a);
     }
-    sh = sh / 10.0 * (0.35 + 0.65 * max(sph, 0.0));
-    if (flap > 0.5) col = flapCol;
-    else {
-      if (baseHit > 0.5) col = baseCol;
-      col *= 1.0 - sh * 0.38;
+    vec4 hc = texture(uHeads, uvAt(src));
+    // A wad is solid: the gaps between petals are folded shut inside it. So
+    // where a crushed pixel falls in a gap, the paper there is what lies
+    // nearer the middle.
+    // (about the petals' middle, a little up the head, so the stalk below is
+    // never what fills a gap)
+    vec2 Hb = H + normalize(uHead[i].zw) * R * 0.45;
+    // its outline is a wad's: lumpy, never a circle; and it gives way to the
+    // head's own outline gradually as it opens, not all at once
+    vec2 rb = H + rel - Hb;
+    float ang = atan(rb.y, rb.x);
+    float lump = 0.78 + 0.22 * vnoise(vec2(ang * 2.2 + seed, seed)) + 0.10 * vnoise(vec2(ang * 7.0, seed + 3.0));
+    float ball = step(length(rb), R * 0.42 * lump * smoothstep(0.0, 0.65, c));
+    for (int t = 1; t <= 3; t++) {
+      if (hc.a > 0.5 || ball < 0.5) break;
+      src = Hb + (src - Hb) * 0.55;
+      hc = texture(uHeads, uvAt(src));
+    }
+    if (hc.a > 0.5) {
+      vec3 rgb = hc.rgb / max(hc.a, 1e-3);
+      float hk = keyOf(rgb);
+      vec3 face = folded(printOn(paper(rgb, hk, 1.0), src - uAnchor, hk, 0.45, 1.0), uHeadFold, src);
+      // the crumple: facets in the flat sheet's own coordinates, so they stay
+      // on the paper as it opens, smaller and sharper the more crushed it is
+      float cs = R * mix(0.28, 0.5, 1.0 - c);
+      vec2 g = (src - H) / cs;
+      vec2 n0 = floor(g), f0 = fract(g);
+      float md = 8.0, md2 = 8.0;
+      vec2 mid = vec2(0.0);
+      for (int yy = -1; yy <= 1; yy++) for (int xx = -1; xx <= 1; xx++) {
+        vec2 gg = vec2(float(xx), float(yy));
+        vec2 o = vec2(hash21(n0 + gg + seed), hash21(n0 + gg + seed + 19.1));
+        vec2 r = gg + o - f0;
+        float d = dot(r, r);
+        if (d < md) { md2 = md; md = d; mid = n0 + gg; } else if (d < md2) md2 = d;
+      }
+      float edge = sqrt(md2) - sqrt(md);
+      float ta = hash21(mid + seed * 1.7) * 6.2832;
+      float tilt = (0.15 + 1.1 * c) * (0.5 + 0.5 * hash21(mid + 3.3));
+      vec3 nrm = normalize(vec3(cos(ta) * tilt, sin(ta) * tilt, 1.0));
+      float lit = dot(nrm, normalize(LIGHT)) / normalize(LIGHT).z;
+      face *= mix(1.0, lit, 0.85);
+      face *= 1.0 - smoothstep(0.12, 0.0, edge) * (0.06 + 0.30 * c);
+      // the inside of the wad is in its own shade
+      face *= 1.0 - 0.25 * c * smoothstep(R * 0.1, 0.0, length(p - H) - R * 0.25 * scale);
+      col = face;
+    } else {
+      col *= 1.0 - min(1.0, sh / 6.0) * (0.25 + 0.15 * c);
     }
   }
 
@@ -652,7 +662,7 @@ class Sketch extends Renderer2D {
       const section = plant.sections.find((sc) => sc.step === reveal.step);
       if (section) {
         const k = reveal.progress * section.steps;
-        const OPEN_OVER = 2.2;
+        const OPEN_OVER = 3.2;     // slow: paper unballs gradually
         const keep = [];
         for (const node of section.nodes) {
           const open = Math.min(1, Math.max(0, (k - Math.max(0, node.k - OPEN_OVER)) / OPEN_OVER));
@@ -780,17 +790,17 @@ class Sketch extends Renderer2D {
       for (const { section, node, open } of opening.slice(0, 3)) {
         const shapes = buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all');
         drawPlantLive(hc, shapes, opts);
-        // turned over flat at the start, upright half way, a little bounce as
-        // it lands: paper is light, and the air under it holds it up a moment.
-        // Held on twos, as a cut-out film is shot.
-        const q = Math.floor(open * 14) / 14;
-        const e = q * q * (3 - 2 * q);
-        const phi = Math.PI * (1 - Math.min(1, e / 0.86)) + 0.22 * Math.sin(Math.PI * Math.min(1, Math.max(0, (e - 0.86) / 0.14)));
+        // How crumpled it still is: all of it at first, then easing out
+        // slowly, fastest early as the ball springs, slowest at the end as the
+        // last creases relax.
+        const crumple = Math.pow(1 - open, 1.7);
         const sd = [Math.sin(node.angle), Math.cos(node.angle)];
         this.heads.push({
+          // about its foot, where it is stuck to the stem, so the wad sits on
+          // the stem and opens upward off it
           H: [v.X(node.x, s0), v.Y(node.y, s0)],
           A: [sd[0], -sd[1]],
-          phi,
+          phi: crumple,
           R: node.size * 1.7 * s0 + 8,
         });
       }

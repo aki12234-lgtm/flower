@@ -39,7 +39,7 @@ function facetGrey(nx, ny) {
   const g = Math.round(Math.max(0, Math.min(1, lit)) * 255);
   return `rgb(${g},${g},${g})`;
 }
-function drawFolds(ctx, shapes) {
+function drawFolds(ctx, shapes, px = 1) {
   for (const s of shapes) {
     if (s.type === 'band') {
       const p = s.pts;
@@ -60,6 +60,12 @@ function drawFolds(ctx, shapes) {
           ctx.fill();
         }
       }
+    } else if (s.type === 'disc' && s.r * px < 7) {
+      // too small to fold: a dot punched from the sheet, flat
+      ctx.fillStyle = facetGrey(0, 0);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
     } else if (s.type === 'disc') {
       const n = 8;
       const out = outlineOf(s);
@@ -424,6 +430,20 @@ void main() {
   float core = 1.0 - smoothstep(w - 0.5, w + 0.3, up - 0.5 + fibre);
   col = mix(col, mix(CORE, base, 0.12) * (0.95 + 0.05 * vnoise(aw * 1.7)), core * step(0.15, w));
 
+  // ---- the world folded too ----
+  // The ranges already have a lit face and a shade face, which is a fold. The
+  // land is pleated: broad folds across it, valley and mountain in turn, wider
+  // the further back, pinned to its own layer. The sky is a flat sheet.
+  if (kHere > 0.001 && texture(uLayer, uvAt(p)).b < 0.5) {
+    float yl = (p - anchorOf(kHere)).y;
+    float w = 34.0 * clamp(kHere, 0.35, 1.0) + 10.0;
+    float f = yl / w;
+    float side = mod(floor(f), 2.0) < 1.0 ? 1.0 : -1.0;
+    float fr = fract(f);
+    col *= 1.0 + side * 0.07 + (fr - 0.5) * side * 0.05;
+    col *= 1.0 - smoothstep(0.05, 0.0, min(fr, 1.0 - fr)) * 0.08;
+  }
+
   // ---- the plant: cut out and stuck on top ----
   vec2 cp = cut(p);
   vec4 pc = plantAt(cp);
@@ -786,14 +806,14 @@ class Sketch extends Renderer2D {
       this.foldKey = foldKey;
       this.foldShapes = buildFlatPlant(plant, now, 'all');
     }
-    drawFolds(fc, this.foldShapes);
+    drawFolds(fc, this.foldShapes, s0);
     const hf = this.sheet('headFoldSheet').getContext('2d');
     hf.setTransform(1, 0, 0, 1, 0, 0);
     hf.clearRect(0, 0, this.pw, this.ph);
     if (opening.length) {
       v.at(hf, 0);
       for (const { section, node } of opening.slice(0, 3)) {
-        drawFolds(hf, buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all'));
+        drawFolds(hf, buildFlatPlant({ ...plant, tips: [], sections: [{ ...section, segments: [], nodes: [node] }] }, null, 'all'), s0);
       }
     }
   }
